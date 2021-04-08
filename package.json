@@ -1,0 +1,18 @@
+{
+  "name": "twitter-image-downloader",
+  "version": "1.0.0",
+  "description": "",
+  "main": "twitter.js",
+  "scripts": {
+    "start": "node twitter.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "path": "^0.12.7",
+    "puppeteer": "^8.0.0",
+    "request": "^2.88.2",
+    "yargs": "^16.2.0"
+  }
+}
