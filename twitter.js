@@ -25,12 +25,12 @@ async function autoScroll(page) {
   });
 }
 
-function download(uri) {
+function download(uri, name, extension) {
   return new Promise((resolve, reject) => {
     request.head(uri, function (err, res, body) {
       const filePath = path.resolve(
         `${__dirname}/images`,
-        `${Date.now()}`
+        `${name}.${extension}`
       );
       request(uri).pipe(fs.createWriteStream(filePath)).on("close", resolve);
     });
@@ -63,8 +63,10 @@ async function getTwitterImages() {
        */
         const urlcleaner = /(&name=([a-zA-Z0-9_]*$))\b/;
         let cleanurl = url.replace(urlcleaner, "&name=large");
-        console.log(`Downloading...`);
-        await download(cleanurl);
+        const imageDetails = cleanurl.match("https:\/\/pbs\.twimg\.com\/media\/(.*)\?format=(.*)&name=(.*)")
+        const imageName = imageDetails[1]
+        const imageExtension = imageDetails[2]
+        await download(cleanurl, imageName, imageExtension);
       }
     }
   });
