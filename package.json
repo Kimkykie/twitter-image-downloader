@@ -10,6 +10,8 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "chalk": "^4.1.1",
+    "inquirer": "^8.1.1",
     "path": "^0.12.7",
     "puppeteer": "^8.0.0",
     "request": "^2.88.2",

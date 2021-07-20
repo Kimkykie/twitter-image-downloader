@@ -1,11 +1,9 @@
 const puppeteer = require("puppeteer");
 const fs = require("fs");
-const path = require("path");
-const request = require("request");
-const yargs = require('yargs/yargs')
-const { hideBin } = require('yargs/helpers')
+const Inquirer = require("inquirer");
+const chalk = require("chalk");
 
-const argv = yargs(hideBin(process.argv)).argv
+const downloader = require("./lib/downloader");
 
 async function autoScroll(page) {
   await page.evaluate(async () => {
@@ -20,24 +18,12 @@ async function autoScroll(page) {
           clearInterval(timer);
           resolve();
         }
-      }, 100);
+      }, 300);
     });
   });
 }
 
-function download(uri, name, extension) {
-  return new Promise((resolve, reject) => {
-    request.head(uri, function (err, res, body) {
-      const filePath = path.resolve(
-        `${__dirname}/images`,
-        `${name}.${extension}`
-      );
-      request(uri).pipe(fs.createWriteStream(filePath)).on("close", resolve);
-    });
-  });
-}
-
-async function getTwitterImages() {
+async function getTwitterImages(username) {
   const browser = await puppeteer.launch({
     headless: false,
     args: ["--disable-notifications"],
@@ -47,6 +33,7 @@ async function getTwitterImages() {
     width: 1366,
     height: 768,
   });
+
   const dir = `./images`;
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir);
@@ -58,20 +45,26 @@ async function getTwitterImages() {
        * Filter to only collect tweet images and ignore profile pictures and banners.
        */
       if (url.match("(https://pbs.twimg.com/media/(.*))")) {
-      /**
-       * Convert twitter image urls to high quality
-       */
+        /**
+         * Convert twitter image urls to high quality
+         */
         const urlcleaner = /(&name=([a-zA-Z0-9_]*$))\b/;
         let cleanurl = url.replace(urlcleaner, "&name=large");
-        const imageDetails = cleanurl.match("https:\/\/pbs\.twimg\.com\/media\/(.*)\?format=(.*)&name=(.*)")
-        const imageName = imageDetails[1]
-        const imageExtension = imageDetails[2]
-        await download(cleanurl, imageName, imageExtension);
+
+        try {
+          const imageDetails = cleanurl.match(
+            "https://pbs.twimg.com/media/(.*)?format=(.*)&name=(.*)"
+          );
+          const imageName = imageDetails[1];
+          const imageExtension = imageDetails[2];
+          console.log(chalk.magenta("Downloading..."));
+          await downloader(cleanurl, imageName, imageExtension, username);
+        } catch (error) {}
       }
     }
   });
 
-  const pageUrl = `https://twitter.com/${argv.handle.replace('@', '')}`;
+  const pageUrl = `https://twitter.com/${username.replace("@", "")}`;
 
   await page.goto(pageUrl, {
     timeout: 0,
@@ -79,7 +72,15 @@ async function getTwitterImages() {
   });
   await autoScroll(page);
   await browser.close();
-  console.log('Download Complete');
+  console.log(chalk.cyan("Download Complete"));
 }
 
-getTwitterImages();
+Inquirer.prompt([
+  {
+    type: "input",
+    message: chalk.cyan("Enter Twitter Username: "),
+    name: "username",
+  },
+]).then((answers) => {
+  getTwitterImages(answers.username);
+});
