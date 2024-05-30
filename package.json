@@ -2,19 +2,21 @@
   "name": "twitter-image-downloader",
   "version": "1.0.0",
   "description": "",
-  "main": "twitter.js",
+  "main": "index.js",
+  "type": "module",
   "scripts": {
-    "start": "node twitter.js"
+    "start": "node index.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "chalk": "^4.1.1",
-    "inquirer": "^8.1.1",
+    "axios": "^1.7.2",
+    "chalk": "^5.0.0",
+    "inquirer": "^9.2.3",
     "path": "^0.12.7",
-    "puppeteer": "^8.0.0",
+    "puppeteer": "^20.4.0",
     "request": "^2.88.2",
-    "yargs": "^16.2.0"
+    "yargs": "^17.7.2"
   }
 }
