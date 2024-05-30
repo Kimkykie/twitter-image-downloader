@@ -4,10 +4,10 @@ This is a simple tool to download images posted/retweeted in a user's timeline.
 
 ## Modules included
 
-- Puppeteer - Node.js library which provides a high-level API to control headless Chrome or Chromium or to interact with the DevTools protocol. I use it for web crawling and scarping in this project.
-- Request - Simplified http request client
-- Inquirer - An easily embeddable and beautiful command line interface for Node.js
-- Chalk - Chalk is a library that provides a simple and easy to use interface for applying ANSI colors and styles to your command-line output.
+- **Puppeteer**: A Node.js library which provides a high-level API to control headless Chrome or Chromium or to interact with the DevTools protocol. It is used for web crawling and scraping in this project.
+- **Axios**: A promise-based HTTP client for the browser and Node.js, used here as a replacement for the deprecated `request` module.
+- **Inquirer**: An easily embeddable and beautiful command line interface for Node.js.
+- **Chalk**: A library that provides a simple and easy-to-use interface for applying ANSI colors and styles to your command-line output.
 
 ## Installation
 
@@ -27,7 +27,7 @@ npm install
 
 ## Usage
 
-The code is located in `twitter.js`
+The code is located in `index.js`
 
 #### Project Structure
 
@@ -44,14 +44,16 @@ npm start
 Enter the twitter username with or without the @
 
 ```bash
-? Enter Twitter Username:
+? Enter X Username:
+? Enter X Password:
+? Enter the X account handle to fetch media from:
 ```
 
 The script will start running and create a folder with the `username` you entered in the images folder.
 
-Puppeteer is currently set to `headless:false` if you want to see the web crawling process. You can change this to `headless:true` in `twitter.js` if you want it to run in headless mode.
+Puppeteer is currently set to `headless:false` if you want to see the web crawling process. You can change this to `headless:true` in `index.js` if you want it to run in headless mode.
 
-The script will run scrolling through the user timeline until it reaches Twitter maximum number of viewable tweets and once done, a **`Download Complete`** log will be printed in your console or browser automatically closes if your browser is not in headless mode.
+The script will scroll through the user timeline until it reaches Twitter's maximum number of viewable tweets. Once done, a **Download Complete** log will be printed in your console, or the browser will automatically close if it is not in headless mode.
 
 To view images, open your `images`folder.
 
