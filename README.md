@@ -1,6 +1,6 @@
 # 🐦 Twitter Timeline Image Downloader
 
-An advanced tool to download images from a user's Twitter timeline, showcasing senior software engineering practices.
+An advanced tool to download images from a user's Twitter timeline.
 
 ![Project Banner](assets/banner.png)
 
