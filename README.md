@@ -102,9 +102,17 @@ You can configure the application by modifying the `.env` file. Available option
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
-## ⚠️ Disclaimer
+## ⚠️ Disclaimer and Caution
 
-This tool is for educational purposes only. Ensure you comply with Twitter's terms of service and respect copyright laws when using this tool.
+### Risk of Account Flagging
+Please be aware that using this tool may potentially lead to your Twitter account being flagged or blocked. Twitter has mechanisms in place to detect automated scraping activities, which could result in account restrictions or bans.
+
+### Use of Sockpuppets
+To mitigate risks to your primary account, consider using a sockpuppet account for scraping activities. A sockpuppet is a false online identity created for purposes such as circumventing restrictions or maintaining anonymity.
+
+For more information on sockpuppets and their use in OSINT (Open Source Intelligence), please refer to this <a href="https://www.sans.org/blog/what-are-sock-puppets-in-osint/" target="_blank">SANS Institute article on sockpuppets</a>.
+
+**Remember**: Always use this tool responsibly and in compliance with Twitter's terms of service. The developers of this tool are not responsible for any account restrictions or legal issues that may arise from its use.
 
 ## 📄 License
 
