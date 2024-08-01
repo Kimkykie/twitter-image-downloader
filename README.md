@@ -1,66 +1,111 @@
-# Twitter Timeline Image Downloader
+# 🐦 Twitter Timeline Image Downloader
 
-This is a simple tool to download images posted/retweeted in a user's timeline.
+An advanced tool to download images from a user's Twitter timeline, showcasing senior software engineering practices.
 
-## Modules included
+![Project Banner](assets/banner.png)
 
-- **Puppeteer**: A Node.js library which provides a high-level API to control headless Chrome or Chromium or to interact with the DevTools protocol. It is used for web crawling and scraping in this project.
-- **Axios**: A promise-based HTTP client for the browser and Node.js, used here as a replacement for the deprecated `request` module.
-- **Inquirer**: An easily embeddable and beautiful command line interface for Node.js.
-- **Chalk**: A library that provides a simple and easy-to-use interface for applying ANSI colors and styles to your command-line output.
+## ✨ Features
 
-## Installation
+- 🔐 Automated login to Twitter
+- 🖼️ Scrapes images from a specified user's timeline
+- 📜 Handles pagination to fetch all available images
+- 🛡️ Robust error handling and retry mechanisms
+- 🚀 Efficient image downloading with duplicate prevention
+- 📊 Detailed logging for better debugging and monitoring
+- ⚙️ Configurable via environment variables for easy deployment
 
-#### Prerequisite
+## 🏗️ Project Structure
+```code
+twitter-image-downloader/
+├── images/
+├── src/
+│   ├── config/
+│   │   └── config.js
+│   ├── services/
+│   │   ├── authService.js
+│   │   ├── browserService.js
+│   │   └── imageService.js
+│   ├── utils/
+│   │   ├── logger.js
+│   │   └── fileSystem.js
+│   └── index.js
+├── lib/
+│   └── downloader.js
+├── images/
+├── .env.example
+├── .gitignore
+├── package.json
+├── package-lock.json
+└── README.md
+```
 
-The project runs on nodejs so make sure you have nodejs installed before installation and running it.
+## 🛠️ Technologies Used
 
-You can find instructions on how to install Nodejs and npm [here](https://docs.npmjs.com/downloading-and-installing-node-js-and-npm)
+- **Node.js**: Runtime environment
+- **Puppeteer**: Web scraping and automation
+- **Axios**: HTTP client for image downloads
+- **Winston**: Logging framework
+- **Inquirer**: Command-line user interface
+- **Dotenv**: Environment variable management
 
-On your terminal
+## 📥 Installation
 
+### Prerequisites
+
+Ensure you have Node.js (version 14 or higher) and npm installed on your system.
+
+### Steps
+
+1. Clone the repository:
 ```bash
-git clone https://github.com/Kimkykie/twitter-image-downloader
+git clone https://github.com/Kimkykie/twitter-image-downloader.git
 cd twitter-image-downloader
+```
+
+2. Install dependencies:
+```bash
 npm install
 ```
 
-## Usage
 
-The code is located in `index.js`
+3. Copy the `.env.example` file to `.env` and adjust the variables as needed:
+```bash
+cp .env.example .env
+```
 
-#### Project Structure
 
-The profile images will be downloaded to the `images` directory
+## 🚀 Usage
 
-#### How to Download Images
-
-Once in the `twitter-image-downloader` directory, run the command below and you will be prompted to enter with the username of the Twitter Profile you want to download images from.
+1. Start the application:
 
 ```bash
 npm start
 ```
 
-Enter the twitter username with or without the @
+2. Follow the prompts to enter your Twitter credentials and the username of the account you want to download images from.
 
-```bash
-? Enter X Username:
-? Enter X Password:
-? Enter the X account handle to fetch media from:
-```
+3. The script will start running and create a folder with the username you entered in the `images` folder.
 
-The script will start running and create a folder with the `username` you entered in the images folder.
+4. Once complete, you'll see a "Download Complete" message in your console.
 
-Puppeteer is currently set to `headless:false` if you want to see the web crawling process. You can change this to `headless:true` in `index.js` if you want it to run in headless mode.
 
-The script will scroll through the user timeline until it reaches Twitter's maximum number of viewable tweets. Once done, a **Download Complete** log will be printed in your console, or the browser will automatically close if it is not in headless mode.
+## ⚙️ Configuration
 
-To view images, open your `images`folder.
+You can configure the application by modifying the `.env` file. Available options include:
 
-## Disclaimer
+- `PUPPETEER_HEADLESS`: Set to 'true' for headless mode, 'false' to see the browser (default: false)
+- `PUPPETEER_SLOWMO`: Slow down Puppeteer operations by specified milliseconds (default: 50)
+- `VIEWPORT_WIDTH` and `VIEWPORT_HEIGHT`: Set the browser viewport size
+- Various timeout durations and URLs
 
-This tool is used for educational purposes to see how puppeteer can be utilized for image scraping.
+## 🤝 Contributing
 
-## License
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## ⚠️ Disclaimer
+
+This tool is for educational purposes only. Ensure you comply with Twitter's terms of service and respect copyright laws when using this tool.
+
+## 📄 License
 
 [MIT](https://choosealicense.com/licenses/mit/)
