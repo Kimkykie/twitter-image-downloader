@@ -1,3 +1,5 @@
+// index.js
+
 import puppeteer from 'puppeteer';
 import fs from 'fs';
 import Inquirer from 'inquirer';

@@ -1,3 +1,5 @@
+// src/index.js
+
 import Inquirer from 'inquirer';
 import authService from './services/authService.js';
 import browserService from './services/browserService.js';
