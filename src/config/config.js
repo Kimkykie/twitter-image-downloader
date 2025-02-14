@@ -1,3 +1,4 @@
+// src/config.js
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -28,7 +29,7 @@ export default {
     imageDetails: /https:\/\/pbs.twimg.com\/media\/(.*?)\?format=(.*)&name=(.*)/,
   },
   puppeteer: {
-    headless: process.env.PUPPETEER_HEADLESS === 'true',
+    headless: process.env.PUPPETEER_HEADLESS === 'false',
     slowMo: parseInt(process.env.PUPPETEER_SLOWMO) || 50,
     args: [
       '--no-sandbox',

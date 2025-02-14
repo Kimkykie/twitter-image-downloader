@@ -1,3 +1,6 @@
+// src/services/browserService.js
+
+
 import puppeteer from 'puppeteer';
 import config from '../config/config.js';
 import logger from '../utils/logger.js';

@@ -1,3 +1,5 @@
+// src/services/imageService.js
+
 import config from '../config/config.js';
 import downloader from '../../lib/downloader.js';
 import logger from '../utils/logger.js';

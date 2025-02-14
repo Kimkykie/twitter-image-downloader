@@ -1,3 +1,5 @@
+// src/services/authService.js
+
 import config from '../config/config.js';
 import logger from '../utils/logger.js';
 
