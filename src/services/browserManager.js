@@ -1,73 +1,81 @@
 // src/services/browserManager.js
-
+import puppeteer from 'puppeteer';
 import fs from 'fs';
 import path from 'path';
-import puppeteer from 'puppeteer';
 import config from '../config/config.js';
 import logger from '../utils/logger.js';
 
 class BrowserManager {
   constructor() {
     this.browser = null;
+    this.activePage = null;
     this.userDataDir = path.join(process.cwd(), 'browser_data');
     this.cookiesPath = path.join(this.userDataDir, 'cookies.json');
-    this.isFirstRun = !fs.existsSync(this.userDataDir);
   }
 
-  /**
-   * Initialize browser manager and create necessary directories
-   */
-  async init() {
-    try {
-      if (this.isFirstRun) {
-        fs.mkdirSync(this.userDataDir, { recursive: true });
-        logger.info('Created browser data directory');
-      }
-    } catch (error) {
-      logger.error('Error initializing browser manager:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Launch browser with persistent data directory
-   */
   async launchBrowser() {
-    try {
-      if (!this.browser || !this.browser.isConnected()) {
-        this.browser = await puppeteer.launch({
-          headless: config.puppeteer.headless,
-          userDataDir: this.userDataDir,
-          args: [
-            ...config.puppeteer.args,
-            `--user-data-dir=${this.userDataDir}`,
-          ],
-          slowMo: config.puppeteer.slowMo || 0,
-          defaultViewport: {
-            width: config.viewport.width,
-            height: config.viewport.height
-          }
-        });
+    if (!this.browser || !this.browser.isConnected()) {
+      this.browser = await puppeteer.launch({
+        headless: config.puppeteer.headless,
+        userDataDir: this.userDataDir,
+        args: config.puppeteer.args,
+        slowMo: config.puppeteer.slowMo,
+        defaultViewport: config.viewport
+      });
 
-        // Handle browser disconnection
-        this.browser.on('disconnected', () => {
-          logger.info('Browser disconnected');
-          this.browser = null;
-        });
+      this.browser.on('disconnected', () => {
+        logger.info('Browser disconnected');
+        this.browser = null;
+        this.activePage = null;
+      });
 
-        logger.info('Browser launched successfully with persistent data');
-      }
-      return this.browser;
-    } catch (error) {
-      logger.error('Failed to launch browser:', error);
-      throw error;
+      logger.info('Browser launched successfully');
     }
+    return this.browser;
   }
 
-  /**
+  async getPage() {
+    if (this.activePage && !this.activePage.isClosed()) {
+      return this.activePage;
+    }
+
+    const browser = await this.launchBrowser();
+    this.activePage = await browser.newPage();
+    await this.configurePage(this.activePage);
+    return this.activePage;
+  }
+
+  async configurePage(page) {
+    await page.setViewport(config.viewport);
+    await page.setUserAgent(config.userAgent);
+    await page.setRequestInterception(true);
+
+    page.on('request', (request) => {
+      const resourceType = request.resourceType();
+      if (['stylesheet', 'font', 'media', 'websocket', 'other'].includes(resourceType)) {
+        request.abort();
+      } else if (resourceType === 'image') {
+        const url = request.url();
+        if (url.includes('pbs.twimg.com/media')) {
+          request.continue();
+        } else {
+          request.abort();
+        }
+      } else {
+        request.continue();
+      }
+    });
+
+    logger.info('Page configured successfully');
+    return page;
+  }
+
+   /**
    * Check if user is already logged in
+   * @param {Object} page - Puppeteer page object
+   * @returns {Promise<boolean>} - True if logged in, false otherwise
    */
-  async isLoggedIn(page) {
+   async isLoggedIn(page) {
     try {
       // Use less strict wait conditions and shorter timeout
       await page.goto(config.urls.base, {
@@ -103,7 +111,7 @@ class BrowserManager {
         return isLoggedIn;
 
       } catch (timeoutError) {
-        logger.warn('Error checking login elements, assuming not logged in');
+        logger.warn('Error checking login elements, assuming not logged in:', timeoutError);
         return false;
       }
     } catch (error) {
@@ -122,9 +130,6 @@ class BrowserManager {
     }
   }
 
-  /**
-   * Save cookies for future sessions
-   */
   async saveCookies(page) {
     try {
       const cookies = await page.cookies();
@@ -135,26 +140,20 @@ class BrowserManager {
       logger.info('Cookies saved successfully');
     } catch (error) {
       logger.error('Error saving cookies:', error);
-      throw error;
     }
   }
 
-  /**
-   * Load saved cookies into the page
-   */
   async loadCookies(page) {
     try {
       if (fs.existsSync(this.cookiesPath)) {
         const cookiesString = await fs.promises.readFile(this.cookiesPath, 'utf8');
         const cookies = JSON.parse(cookiesString);
-
         if (Array.isArray(cookies) && cookies.length > 0) {
           await page.setCookie(...cookies);
           logger.info('Cookies loaded successfully');
           return true;
         }
       }
-      logger.info('No valid cookies found');
       return false;
     } catch (error) {
       logger.error('Error loading cookies:', error);
@@ -162,50 +161,36 @@ class BrowserManager {
     }
   }
 
-  /**
-   * Get existing browser instance or create new one
-   */
-  async getBrowser() {
-    if (!this.browser) {
-      await this.launchBrowser();
-    }
-    return this.browser;
+  async autoScroll(page) {
+    await page.evaluate(async () => {
+      await new Promise((resolve) => {
+        let totalHeight = 0;
+        const distance = 100;
+        const timer = setInterval(() => {
+          const scrollHeight = document.body.scrollHeight;
+          window.scrollBy(0, distance);
+          totalHeight += distance;
+          if (totalHeight >= scrollHeight) {
+            clearInterval(timer);
+            resolve();
+          }
+        }, 200);
+      });
+    });
+    await page.waitForTimeout(2000);
+    logger.info('Page scrolling completed');
   }
 
-  /**
-   * Clean up browser data if needed
-   */
   async cleanup() {
-    try {
-      if (fs.existsSync(this.cookiesPath)) {
-        await fs.promises.unlink(this.cookiesPath);
-        logger.info('Cookies file deleted');
-      }
-
-      // Attempt to remove the entire browser data directory
-      if (fs.existsSync(this.userDataDir)) {
-        fs.rmSync(this.userDataDir, { recursive: true, force: true });
-        logger.info('Browser data directory cleaned up');
-      }
-    } catch (error) {
-      logger.error('Error cleaning up browser data:', error);
-      throw error;
+    if (this.activePage && !this.activePage.isClosed()) {
+      await this.activePage.close();
+      this.activePage = null;
     }
-  }
 
-  /**
-   * Gracefully close browser
-   */
-  async closeBrowser() {
     if (this.browser) {
-      try {
-        await this.browser.close();
-        this.browser = null;
-        logger.info('Browser closed successfully');
-      } catch (error) {
-        logger.error('Error closing browser:', error);
-        throw error;
-      }
+      await this.browser.close();
+      this.browser = null;
+      logger.info('Browser closed successfully');
     }
   }
 }

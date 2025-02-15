@@ -1,74 +1,26 @@
 // src/index.js
-
 import Inquirer from 'inquirer';
-import authService from './services/authService.js';
-import browserService from './services/browserService.js';
-import imageService from './services/imageService.js';
 import browserManager from './services/browserManager.js';
+import authService from './services/authService.js';
+import imageService from './services/imageService.js';
 import logger from './utils/logger.js';
 import { createImageDirectory } from './utils/fileSystem.js';
 
-const MAX_RETRIES = 3;
+async function initialize() {
+  process.on('SIGINT', cleanup);
+  process.on('SIGTERM', cleanup);
 
-/**
- * Main function to fetch Twitter images
- */
-async function getTwitterImages(accountToFetch, username = null, password = null) {
   try {
-    await browserManager.init();
-    const page = await browserService.getPage();
-
-    createImageDirectory(accountToFetch);
-    imageService.setupImageDownloadListeners(page, accountToFetch);
-
-    // Check if already logged in
-    const isLoggedIn = await browserManager.isLoggedIn(page);
-
-    if (!isLoggedIn) {
-      // If we don't have credentials but need to login, throw an error
-      if (!username || !password) {
-        throw new Error('Credentials required but not provided');
-      }
-
-      logger.info('No valid session found, logging in...');
-      for (let retries = 0; retries < MAX_RETRIES; retries++) {
-        try {
-          await authService.loginToTwitter(page, username, password);
-          await browserManager.saveCookies(page);
-          break;
-        } catch (error) {
-          logger.warn(`Retrying login (${retries + 1}/${MAX_RETRIES}): ${error.message}`);
-          if (retries === MAX_RETRIES - 1) {
-            logger.error("Max retries reached. Exiting...");
-            throw new Error('Failed to login after maximum retries');
-          }
-        }
-      }
-    } else {
-      logger.info('Using existing session');
-    }
-
-    await imageService.navigateToMediaPage(page, accountToFetch);
-    await browserService.autoScroll(page);
-
-    // Don't close the browser, just close the page
-    if (page && !page.isClosed()) {
-      await page.close();
-    }
-
-    logger.info("Download Complete");
+    await browserManager.launchBrowser();
   } catch (error) {
-    logger.error('Error in getTwitterImages:', error);
-    throw error;
+    logger.error('Failed to initialize browser:', error);
+    process.exit(1);
   }
 }
 
-/**
- * Cleanup function for graceful shutdown
- */
 async function cleanup() {
   try {
-    await browserManager.closeBrowser();
+    await browserManager.cleanup();
     process.exit(0);
   } catch (error) {
     logger.error('Error during cleanup:', error);
@@ -76,22 +28,58 @@ async function cleanup() {
   }
 }
 
-// Handle cleanup on process termination
-process.on('SIGINT', cleanup);
-process.on('SIGTERM', cleanup);
+async function handleAuth(credentials) {
+  try {
+    const isAuthenticated = await authService.loginToTwitter(
+      credentials.loginUsername,
+      credentials.loginPassword
+    );
 
-/**
- * Main prompt flow
- */
+    if (!isAuthenticated) {
+      throw new Error('Authentication failed');
+    }
+    return true;
+  } catch (error) {
+    logger.error('Authentication error:', error);
+    return false;
+  }
+}
+
+async function handleMediaDownload(targetUsername) {
+  try {
+    // Remove @ if present for directory creation
+    const cleanUsername = targetUsername.replace('@', '');
+    // Create a new directory for this account
+    createImageDirectory(cleanUsername);
+
+    const page = await browserManager.getPage();
+
+    // Setup listeners with clean username
+    imageService.setupImageDownloadListeners(page, cleanUsername);
+
+    // Navigate and scroll
+    await imageService.navigateToMediaPage(page, cleanUsername);
+    await browserManager.autoScroll(page);
+
+    // Give time for any pending downloads to complete
+    await new Promise(resolve => setTimeout(resolve, 5000));
+
+    logger.info('Media download completed for:', cleanUsername);
+    return true;
+  } catch (error) {
+    logger.error(`Failed to download media for ${targetUsername}:`, error);
+    return false;
+  }
+}
+
 async function promptUser() {
   try {
-    const page = await browserService.getPage();
+    const page = await browserManager.getPage();
     const isLoggedIn = await browserManager.isLoggedIn(page);
 
-    let credentials = {};
-
+    // Handle authentication if needed
     if (!isLoggedIn) {
-      credentials = await Inquirer.prompt([
+      const credentials = await Inquirer.prompt([
         {
           type: "input",
           message: "Login: Enter X Username: ",
@@ -105,50 +93,70 @@ async function promptUser() {
           validate: input => input.length > 0 ? true : 'Password cannot be empty'
         }
       ]);
+
+      const authSuccess = await handleAuth(credentials);
+      if (!authSuccess) {
+        logger.error('Failed to authenticate. Exiting...');
+        await cleanup();
+        return;
+      }
     }
 
-    const targetAccount = await Inquirer.prompt([
-      {
-        type: "input",
-        message: "Enter the X account handle to fetch media from: ",
-        name: "targetUsername",
-        validate: input => input.length > 0 ? true : 'Account handle cannot be empty'
+    // Media download loop
+    let continueDownloading = true;
+    while (continueDownloading) {
+      const { targetUsername } = await Inquirer.prompt([
+        {
+          type: "input",
+          message: "Enter the X account handle to fetch media from: ",
+          name: "targetUsername",
+          validate: input => {
+            if (!input.length) return 'Account handle cannot be empty';
+            // Remove @ if present for validation
+            const username = input.startsWith('@') ? input.slice(1) : input;
+            if (username.length > 15) return 'Username too long';
+            if (!/^[a-zA-Z0-9_]+$/.test(username)) return 'Invalid username format';
+            return true;
+          }
+        }
+      ]);
+
+      const downloadSuccess = await handleMediaDownload(targetUsername);
+      if (!downloadSuccess) {
+        logger.warn(`Failed to complete download for ${targetUsername}`);
       }
-    ]);
 
-    if (isLoggedIn) {
-      await getTwitterImages(targetAccount.targetUsername);
-    } else {
-      await getTwitterImages(
-        targetAccount.targetUsername,
-        credentials.loginUsername,
-        credentials.loginPassword
-      );
-    }
+      // Ask about continuing
+      const { continue: shouldContinue } = await Inquirer.prompt([
+        {
+          type: 'confirm',
+          name: 'continue',
+          message: 'Would you like to fetch media from another account?',
+          default: false
+        }
+      ]);
 
-    // Ask if user wants to fetch more accounts
-    const { fetchMore } = await Inquirer.prompt([
-      {
-        type: 'confirm',
-        name: 'fetchMore',
-        message: 'Would you like to fetch media from another account?',
-        default: false
-      }
-    ]);
-
-    if (fetchMore) {
-      await promptUser();
-    } else {
-      await cleanup();
+      continueDownloading = shouldContinue;
     }
   } catch (error) {
-    logger.error('Error in prompt flow:', error);
+    logger.error('Error in application flow:', error);
+  } finally {
     await cleanup();
   }
 }
 
-// Start the application
-promptUser().catch(error => {
-  logger.error('Application error:', error);
-  cleanup();
+async function main() {
+  try {
+    await initialize();
+    await promptUser();
+  } catch (error) {
+    logger.error('Fatal application error:', error);
+    await cleanup();
+  }
+}
+
+// Start application
+main().catch(error => {
+  logger.error('Unhandled error:', error);
+  process.exit(1);
 });
