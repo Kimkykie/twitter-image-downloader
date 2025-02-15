@@ -4,3 +4,5 @@ images/
 *.log
 .idea
 variables.env
+browser_data/
+cookies.json
