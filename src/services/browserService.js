@@ -1,53 +1,72 @@
 // src/services/browserService.js
 
-
-import puppeteer from 'puppeteer';
 import config from '../config/config.js';
 import logger from '../utils/logger.js';
+import browserManager from './browserManager.js';
 
-/**
- * Manages browser-related operations.
- */
 class BrowserService {
-  /**
-   * Launches a new browser instance.
-   * @returns {Promise<Object>} The browser instance.
-   */
-  async launchBrowser() {
-    try {
-      const browser = await puppeteer.launch({
-        headless: config.puppeteer.headless,
-        args: config.puppeteer.args,
-        slowMo: config.puppeteer.slowMo,
-      });
-      logger.info('Browser launched successfully');
-      return browser;
-    } catch (error) {
-      logger.error('Failed to launch browser:', error);
-      throw error;
-    }
+  constructor() {
+    this.activePage = null;
   }
 
   /**
-   * Creates a new page and sets up necessary configurations.
-   * @param {Object} browser - The browser instance.
-   * @returns {Promise<Object>} The configured page object.
+   * Get or create a browser instance
    */
-  async setupPage(browser) {
-    const page = await browser.newPage();
+  async getBrowser() {
+    return browserManager.getBrowser();
+  }
+
+  /**
+   * Creates a new page or returns existing one
+   */
+  async getPage() {
+    if (this.activePage && !this.activePage.isClosed()) {
+      return this.activePage;
+    }
+
+    const browser = await this.getBrowser();
+    this.activePage = await browser.newPage();
+    await this.configurePage(this.activePage);
+    return this.activePage;
+  }
+
+  /**
+   * Configure page settings
+   */
+  async configurePage(page) {
     await page.setViewport(config.viewport);
     await page.setUserAgent(config.userAgent);
     await page.setExtraHTTPHeaders({
       'Accept-Language': 'en-US,en;q=0.9',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+      'Accept-Encoding': 'gzip, deflate, br'
     });
-    logger.info('Page setup complete');
-    return page;
+
+    // Enable request interception only for non-essential resources
+    await page.setRequestInterception(true);
+    page.on('request', (request) => {
+      const resourceType = request.resourceType();
+      // Only abort analytics, ads, and other non-essential resources
+      if (['stylesheet', 'font', 'media', 'websocket', 'other'].includes(resourceType)) {
+        request.abort();
+      } else if (resourceType === 'image') {
+        // Allow images but check if they're from Twitter's media CDN
+        const url = request.url();
+        if (url.includes('pbs.twimg.com/media')) {
+          request.continue();
+        } else {
+          request.abort();
+        }
+      } else {
+        request.continue();
+      }
+    });
+
+    logger.info('Page configured successfully');
   }
 
   /**
-   * Automatically scrolls the page to load all media.
-   * @param {Object} page - The Puppeteer page object.
-   * @returns {Promise<void>}
+   * Automatically scrolls the page to load all media
    */
   async autoScroll(page) {
     await page.evaluate(async () => {
@@ -58,6 +77,8 @@ class BrowserService {
           const scrollHeight = document.body.scrollHeight;
           window.scrollBy(0, distance);
           totalHeight += distance;
+
+          // Check if we've reached the bottom
           if (totalHeight >= scrollHeight) {
             clearInterval(timer);
             resolve();
@@ -65,7 +86,20 @@ class BrowserService {
         }, 200);
       });
     });
+
+    // Wait a bit after scrolling for images to load
+    await page.waitForTimeout(2000);
     logger.info('Auto-scroll complete');
+  }
+
+  /**
+   * Clean up resources if needed
+   */
+  async cleanup() {
+    if (this.activePage && !this.activePage.isClosed()) {
+      await this.activePage.close();
+      this.activePage = null;
+    }
   }
 }
 
