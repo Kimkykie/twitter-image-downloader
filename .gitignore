@@ -6,3 +6,4 @@ images/
 variables.env
 browser_data/
 cookies.json
+.env
