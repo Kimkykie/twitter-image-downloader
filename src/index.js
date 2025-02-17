@@ -1,109 +1,99 @@
 // src/index.js
 import Inquirer from 'inquirer';
-import browserManager from './services/browserManager.js';
 import authService from './services/authService.js';
+import browserService from './services/browserService.js';
 import imageService from './services/imageService.js';
 import logger from './utils/logger.js';
+import config from './config/config.js';
 import { createImageDirectory } from './utils/fileSystem.js';
 
-async function initialize() {
-  process.on('SIGINT', cleanup);
-  process.on('SIGTERM', cleanup);
+const MAX_RETRIES = 3;
 
-  try {
-    await browserManager.launchBrowser();
-  } catch (error) {
-    logger.error('Failed to initialize browser:', error);
-    process.exit(1);
+/**
+ * Gets credentials from env or prompts user
+ */
+async function getCredentials() {
+  if (config.credentials.username && config.credentials.password) {
+    logger.info('Using credentials from environment variables');
+    return {
+      loginUsername: config.credentials.username,
+      loginPassword: config.credentials.password
+    };
   }
-}
 
-async function cleanup() {
-  try {
-    await browserManager.cleanup();
-    process.exit(0);
-  } catch (error) {
-    logger.error('Error during cleanup:', error);
-    process.exit(1);
-  }
-}
-
-async function handleAuth(credentials) {
-  try {
-    const isAuthenticated = await authService.loginToTwitter(
-      credentials.loginUsername,
-      credentials.loginPassword
-    );
-
-    if (!isAuthenticated) {
-      throw new Error('Authentication failed');
+  return await Inquirer.prompt([
+    {
+      type: "input",
+      message: "Login: Enter X Username: ",
+      name: "loginUsername",
+      validate: input => input.length > 0 ? true : 'Username cannot be empty'
+    },
+    {
+      type: "password",
+      message: "Enter X Password: ",
+      name: "loginPassword",
+      validate: input => input.length > 0 ? true : 'Password cannot be empty'
     }
-    return true;
-  } catch (error) {
-    logger.error('Authentication error:', error);
-    return false;
-  }
+  ]);
 }
 
-async function handleMediaDownload(targetUsername) {
-  const page = await browserManager.getPage();
-
+/**
+ * Main function to fetch Twitter images.
+ */
+async function getTwitterImages(accountToFetch, username, password, browser, page) {
   try {
-    // Remove @ if present for directory creation
-    const cleanUsername = targetUsername.replace('@', '');
-    // Create a new directory for this account
-    createImageDirectory(cleanUsername);
+    createImageDirectory(accountToFetch);
 
-    // Setup listeners with clean username
-    imageService.setupImageDownloadListeners(page, cleanUsername);
-
-    // Navigate and scroll
-    await imageService.navigateToMediaPage(page, cleanUsername);
-    await browserManager.autoScroll(page);
-
-    // Give time for any pending downloads to complete
-    await new Promise(resolve => setTimeout(resolve, 10000));
-
-    // Call cleanup to generate summary and CSV
-    await imageService.cleanup(page);
-    return true;
-  } catch (error) {
-    logger.error(`Failed to download media for ${targetUsername}:`, error);
-    return false;
-  }
-}
-
-async function promptUser() {
-  try {
-    const page = await browserManager.getPage();
-    const isLoggedIn = await browserManager.isLoggedIn(page);
-
-    // Handle authentication if needed
-    if (!isLoggedIn) {
-      const credentials = await Inquirer.prompt([
-        {
-          type: "input",
-          message: "Login: Enter X Username: ",
-          name: "loginUsername",
-          validate: input => input.length > 0 ? true : 'Username cannot be empty'
-        },
-        {
-          type: "password",
-          message: "Enter X Password: ",
-          name: "loginPassword",
-          validate: input => input.length > 0 ? true : 'Password cannot be empty'
+    // Login with retries
+    for (let retries = 0; retries < MAX_RETRIES; retries++) {
+      try {
+        await authService.loginToTwitter(page, username, password);
+        break;
+      } catch (error) {
+        logger.warn(`Retrying login (${retries + 1}/${MAX_RETRIES})`);
+        if (retries === MAX_RETRIES - 1) {
+          logger.error("Max retries reached. Exiting...");
+          return false;
         }
-      ]);
-
-      const authSuccess = await handleAuth(credentials);
-      if (!authSuccess) {
-        logger.error('Failed to authenticate. Exiting...');
-        await cleanup();
-        return;
       }
     }
 
-    // Media download loop
+    // Setup listeners after successful login
+    imageService.setupImageDownloadListeners(page, accountToFetch);
+
+    // Navigate to media page and wait for load
+    await imageService.navigateToMediaPage(page, accountToFetch);
+
+    // Wait for initial media content to load
+    await page.waitForTimeout(3000);
+
+    // Start scrolling
+    await browserService.autoScroll(page);
+
+    // Give time for any pending downloads to complete
+    await new Promise(resolve => setTimeout(resolve, 5000));
+
+
+    return true;
+  } catch (error) {
+    logger.error('Error in download process:', error);
+    return false;
+  }
+}
+
+async function main() {
+  let browser = null;
+  let page = null;
+
+  try {
+    // Initialize browser once
+    browser = await browserService.launchBrowser();
+    page = await browserService.setupPage(browser);
+
+    // Get credentials first
+    const credentials = await getCredentials();
+
+    // Setup for continuous downloads
     let continueDownloading = true;
     while (continueDownloading) {
       const { targetUsername } = await Inquirer.prompt([
@@ -113,7 +103,6 @@ async function promptUser() {
           name: "targetUsername",
           validate: input => {
             if (!input.length) return 'Account handle cannot be empty';
-            // Remove @ if present for validation
             const username = input.startsWith('@') ? input.slice(1) : input;
             if (username.length > 15) return 'Username too long';
             if (!/^[a-zA-Z0-9_]+$/.test(username)) return 'Invalid username format';
@@ -124,14 +113,20 @@ async function promptUser() {
 
       console.log('\nStarting download process...\n');
 
-      const downloadSuccess = await handleMediaDownload(targetUsername);
-      if (!downloadSuccess) {
+      const success = await getTwitterImages(
+        targetUsername,
+        credentials.loginUsername,
+        credentials.loginPassword,
+        browser,
+        page
+      );
+
+      if (!success) {
         logger.warn(`Failed to complete download for ${targetUsername}`);
       }
 
-      // Add a delay and clear line before showing the next prompt
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      process.stdout.write('\n');
+      // Add delay before the continue prompt
+      await new Promise(resolve => setTimeout(resolve, 2000));
 
       // Ask about continuing
       const { continue: shouldContinue } = await Inquirer.prompt([
@@ -145,28 +140,35 @@ async function promptUser() {
 
       continueDownloading = shouldContinue;
       if (continueDownloading) {
-        console.clear(); // Clear console for next download
+        console.clear();
       }
     }
   } catch (error) {
-    logger.error('Error in application flow:', error);
+    logger.error('Fatal application error:', error);
   } finally {
-    await cleanup();
+    // Only cleanup when we're completely done
+    if (browser) {
+      await browserService.cleanup();
+    }
   }
 }
 
-async function main() {
-  try {
-    await initialize();
-    await promptUser();
-  } catch (error) {
-    logger.error('Fatal application error:', error);
-    await cleanup();
-  }
-}
+// Handle cleanup on interrupts
+process.on('SIGINT', async () => {
+  logger.info('Received SIGINT. Cleaning up...');
+  await browserService.cleanup();
+  process.exit(0);
+});
+
+process.on('SIGTERM', async () => {
+  logger.info('Received SIGTERM. Cleaning up...');
+  await browserService.cleanup();
+  process.exit(0);
+});
 
 // Start application
-main().catch(error => {
+main().catch(async error => {
   logger.error('Unhandled error:', error);
+  await browserService.cleanup();
   process.exit(1);
 });
