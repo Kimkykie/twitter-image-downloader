@@ -46,13 +46,13 @@ async function handleAuth(credentials) {
 }
 
 async function handleMediaDownload(targetUsername) {
+  const page = await browserManager.getPage();
+
   try {
     // Remove @ if present for directory creation
     const cleanUsername = targetUsername.replace('@', '');
     // Create a new directory for this account
     createImageDirectory(cleanUsername);
-
-    const page = await browserManager.getPage();
 
     // Setup listeners with clean username
     imageService.setupImageDownloadListeners(page, cleanUsername);
@@ -62,9 +62,10 @@ async function handleMediaDownload(targetUsername) {
     await browserManager.autoScroll(page);
 
     // Give time for any pending downloads to complete
-    await new Promise(resolve => setTimeout(resolve, 5000));
+    await new Promise(resolve => setTimeout(resolve, 10000));
 
-    logger.info('Media download completed for:', cleanUsername);
+    // Call cleanup to generate summary and CSV
+    await imageService.cleanup(page);
     return true;
   } catch (error) {
     logger.error(`Failed to download media for ${targetUsername}:`, error);
@@ -121,10 +122,16 @@ async function promptUser() {
         }
       ]);
 
+      console.log('\nStarting download process...\n');
+
       const downloadSuccess = await handleMediaDownload(targetUsername);
       if (!downloadSuccess) {
         logger.warn(`Failed to complete download for ${targetUsername}`);
       }
+
+      // Add a delay and clear line before showing the next prompt
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      process.stdout.write('\n');
 
       // Ask about continuing
       const { continue: shouldContinue } = await Inquirer.prompt([
@@ -137,6 +144,9 @@ async function promptUser() {
       ]);
 
       continueDownloading = shouldContinue;
+      if (continueDownloading) {
+        console.clear(); // Clear console for next download
+      }
     }
   } catch (error) {
     logger.error('Error in application flow:', error);

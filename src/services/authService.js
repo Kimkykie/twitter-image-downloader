@@ -73,7 +73,9 @@ class AuthService {
     await page.waitForTimeout(config.timeouts.short);
 
     // Password input
-    await page.waitForSelector(config.selectors.passwordInput);
+    await page.waitForSelector(config.selectors.passwordInput,{
+      timeout: 60000 // Wait for up to 60 seconds
+    });
     await page.type(config.selectors.passwordInput, password);
 
     // Login button

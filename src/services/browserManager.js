@@ -70,12 +70,12 @@ class BrowserManager {
     return page;
   }
 
-   /**
-   * Check if user is already logged in
-   * @param {Object} page - Puppeteer page object
-   * @returns {Promise<boolean>} - True if logged in, false otherwise
-   */
-   async isLoggedIn(page) {
+  /**
+  * Check if user is already logged in
+  * @param {Object} page - Puppeteer page object
+  * @returns {Promise<boolean>} - True if logged in, false otherwise
+  */
+  async isLoggedIn(page) {
     try {
       // Use less strict wait conditions and shorter timeout
       await page.goto(config.urls.base, {
@@ -123,7 +123,7 @@ class BrowserManager {
       try {
         await page.evaluate(() => {
           window.stop();
-        }).catch(() => {});
+        }).catch(() => { });
       } catch (e) {
         // Ignore any errors in cleanup
       }
@@ -178,6 +178,8 @@ class BrowserManager {
       });
     });
     await page.waitForTimeout(2000);
+
+    process.stdout.write('\n');
     logger.info('Page scrolling completed');
   }
 

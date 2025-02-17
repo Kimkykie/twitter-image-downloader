@@ -4,28 +4,50 @@ import path from 'path';
 import axios from 'axios';
 import config from '../config/config.js';
 import logger from '../utils/logger.js';
+import downloadTracker from '../utils/downloadTracker.js';
 import { createImageDirectory } from '../utils/fileSystem.js';
 
+/**
+ * @typedef {Object} ImageInfo
+ * @property {string} filename - The filename of the image
+ * @property {string} url - The original URL of the image
+ */
+
+/**
+ * @typedef {Object} RateLimiter
+ * @property {number} lastDownload - Timestamp of the last download
+ * @property {number} minDelay - Minimum delay between downloads in milliseconds
+ */
+
+/**
+ * Service for managing image downloads from Twitter
+ * @class ImageService
+ */
 class ImageService {
+  /**
+   * Creates a new ImageService instance
+   */
   constructor() {
+    /** @type {Set<string>} Set of URLs currently being downloaded */
     this.downloadQueue = new Set();
+    /** @type {string|null} Currently processing Twitter username */
     this.currentUsername = null;
+    /** @type {RateLimiter} Rate limiting configuration */
     this.rateLimiter = {
       lastDownload: 0,
-      minDelay: 500  // Minimum delay between downloads
+      minDelay: 500
     };
   }
 
   /**
    * Sets up image download listeners on the page
-   * @param {Object} page - Puppeteer page object
+   * @param {import('puppeteer').Page} page - Puppeteer page object
    * @param {string} accountToFetch - Twitter username to fetch images from
    */
   setupImageDownloadListeners(page, accountToFetch) {
-    // Clear existing listeners if any
     page.removeAllListeners('response');
-
     this.currentUsername = accountToFetch;
+    downloadTracker.reset();
 
     page.on("response", async (response) => {
       const url = response.url();
@@ -37,8 +59,10 @@ class ImageService {
           if (imageDetails) {
             const imageName = imageDetails[1];
             const imageExtension = imageDetails[2];
-            logger.info(`Downloading... ${imageName}.${imageExtension}`);
-            await this.queueImageDownload(cleanurl, this.currentUsername);
+            await this.queueImageDownload(cleanurl, this.currentUsername, {
+              filename: `${imageName}.${imageExtension}`,
+              url: cleanurl
+            });
           }
         } catch (error) {
           logger.error("Error processing image URL:", error);
@@ -46,13 +70,14 @@ class ImageService {
       }
     });
 
-    logger.info(`Set up image listeners for account: ${accountToFetch}`);
+    logger.info(`Starting download for account: ${accountToFetch}`);
   }
 
   /**
    * Navigates to the media page of a Twitter account
-   * @param {Object} page - Puppeteer page object
+   * @param {import('puppeteer').Page} page - Puppeteer page object
    * @param {string} accountToFetch - Twitter username to fetch images from
+   * @throws {Error} If navigation fails
    */
   async navigateToMediaPage(page, accountToFetch) {
     const username = accountToFetch.replace("@", "");
@@ -63,7 +88,6 @@ class ImageService {
         waitUntil: "networkidle0",
         timeout: config.timeouts.long
       });
-      logger.info(`Navigated to media page: ${mediaUrl}`);
     } catch (error) {
       logger.error(`Failed to navigate to ${mediaUrl}:`, error);
       throw error;
@@ -71,7 +95,9 @@ class ImageService {
   }
 
   /**
-   * Rate limits downloads to prevent overwhelming the server
+   * Implements rate limiting for downloads
+   * @private
+   * @returns {Promise<void>}
    */
   async rateLimit() {
     const now = Date.now();
@@ -88,11 +114,13 @@ class ImageService {
   /**
    * Queues an image for download with rate limiting
    * @param {string} imageUrl - URL of the image to download
-   * @param {string} accountToFetch - Twitter username the image belongs to
+   * @param {string} accountToFetch - Twitter username
+   * @param {ImageInfo} imageInfo - Information about the image
+   * @returns {Promise<void>}
    */
-  async queueImageDownload(imageUrl, accountToFetch) {
+  async queueImageDownload(imageUrl, accountToFetch, imageInfo) {
     if (this.downloadQueue.has(imageUrl)) {
-      logger.info('Skipping duplicate image:', imageUrl);
+      downloadTracker.updateProgress('skipped', imageInfo);
       return;
     }
 
@@ -100,17 +128,20 @@ class ImageService {
 
     try {
       await this.rateLimit();
-      await this.downloadImage(imageUrl, accountToFetch);
+      await this.downloadImage(imageUrl, accountToFetch, imageInfo);
     } catch (error) {
-      logger.error('Error downloading image:', error);
+      downloadTracker.updateProgress('failed', imageInfo);
     } finally {
       this.downloadQueue.delete(imageUrl);
     }
   }
 
   /**
-   * Validates image response before processing
-   * @param {Object} response - Axios response object
+   * Validates the response from an image download request
+   * @private
+   * @param {import('axios').AxiosResponse} response - Axios response object
+   * @returns {boolean} True if response is valid
+   * @throws {Error} If response is invalid
    */
   validateImageResponse(response) {
     const contentType = response.headers['content-type'];
@@ -130,9 +161,12 @@ class ImageService {
   /**
    * Downloads a single image
    * @param {string} imageUrl - URL of the image to download
-   * @param {string} accountToFetch - Twitter username the image belongs to
+   * @param {string} accountToFetch - Twitter username
+   * @param {ImageInfo} imageInfo - Information about the image
+   * @returns {Promise<void>}
+   * @throws {Error} If download fails
    */
-  async downloadImage(imageUrl, accountToFetch) {
+  async downloadImage(imageUrl, accountToFetch, imageInfo) {
     try {
       const imageDetails = imageUrl.match(config.regex.imageDetails);
       if (!imageDetails) {
@@ -142,20 +176,17 @@ class ImageService {
       const [, imageName, imageExtension] = imageDetails;
       const dirPath = path.join('./images', accountToFetch);
 
-      // Ensure directory exists
       if (!fs.existsSync(dirPath)) {
         createImageDirectory(accountToFetch);
       }
 
       const filePath = path.join(dirPath, `${imageName}.${imageExtension}`);
 
-      // Check if file already exists
       if (fs.existsSync(filePath)) {
-        logger.info(`File already exists: ${imageName}.${imageExtension}`);
+        downloadTracker.updateProgress('skipped', imageInfo);
         return;
       }
 
-      // Download the image with retries
       const maxRetries = 3;
       let retryCount = 0;
 
@@ -168,14 +199,12 @@ class ImageService {
             headers: {
               'User-Agent': config.userAgent
             },
-            timeout: 10000  // 10 second timeout
+            timeout: 10000
           });
 
           this.validateImageResponse(response);
-
-          // Save the image
           await fs.promises.writeFile(filePath, response.data);
-          logger.info(`Successfully downloaded: ${imageName}.${imageExtension} to ${accountToFetch}'s directory`);
+          downloadTracker.updateProgress('downloaded', imageInfo);
           return;
 
         } catch (error) {
@@ -183,29 +212,36 @@ class ImageService {
           if (retryCount === maxRetries) {
             throw error;
           }
-          logger.warn(`Retry ${retryCount}/${maxRetries} for ${imageName}`);
           await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
         }
       }
     } catch (error) {
-      if (error.response) {
-        logger.error(`Download failed with status ${error.response.status}: ${imageUrl}`);
-      } else {
-        logger.error(`Download failed: ${error.message}`);
-      }
+      downloadTracker.updateProgress('failed', imageInfo);
       throw error;
     }
   }
 
   /**
-   * Cleans up resources
-   * @param {Object} page - Puppeteer page object
+   * Cleans up resources and generates final reports
+   * @param {import('puppeteer').Page} page - Puppeteer page object
+   * @returns {Promise<void>}
    */
-  cleanup(page) {
+  async cleanup(page) {
     if (page) {
       page.removeAllListeners('response');
     }
     this.downloadQueue.clear();
+
+    // Add spacing before summary
+    process.stdout.write('\n');
+
+    // Print final summary and export CSV
+    downloadTracker.printSummary();
+    await downloadTracker.exportToCsv(this.currentUsername);
+
+    // Add spacing after summary
+    process.stdout.write('\n');
+
     this.currentUsername = null;
   }
 }
