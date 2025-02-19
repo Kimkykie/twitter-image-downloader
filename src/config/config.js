@@ -14,7 +14,7 @@ export default {
   },
   selectors: {
     usernameInput: 'input[name="text"]',
-    nextButtonXPath: "//button[@role='button' and .//span[text()='Next']]",
+    nextButtonXPath: "xpath/.//button[@role='button' and .//span[text()='Next']]",
     passwordInput: 'input[name="password"]',
     loginButton: 'button[data-testid="LoginForm_Login_Button"]',
   },

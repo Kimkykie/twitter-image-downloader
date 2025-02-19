@@ -3,6 +3,8 @@ import config from '../config/config.js';
 import logger from '../utils/logger.js';
 import fs from 'fs';
 import path from 'path';
+import { setTimeout } from 'node:timers/promises';
+
 
 class AuthService {
   constructor() {
@@ -99,14 +101,14 @@ class AuthService {
       await page.waitForSelector(config.selectors.usernameInput);
       await page.type(config.selectors.usernameInput, username);
 
-      const [nextButton] = await page.$x(config.selectors.nextButtonXPath);
+      const [nextButton] = await page.$$(config.selectors.nextButtonXPath);
       if (nextButton) {
         await nextButton.click();
       } else {
         throw new Error("Next button not found");
       }
 
-      await page.waitForTimeout(config.timeouts.medium);
+      await setTimeout(config.timeouts.medium);
 
       await page.waitForSelector(config.selectors.passwordInput, {
         timeout: 60000,

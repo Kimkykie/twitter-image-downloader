@@ -1,5 +1,6 @@
 // src/index.js
 import Inquirer from 'inquirer';
+import { setTimeout } from 'node:timers/promises';
 import authService from './services/authService.js';
 import browserService from './services/browserService.js';
 import imageService from './services/imageService.js';
@@ -65,7 +66,7 @@ async function getTwitterImages(accountToFetch, username, password, browser, pag
     await imageService.navigateToMediaPage(page, accountToFetch);
 
     // Wait for initial media content to load
-    await page.waitForTimeout(3000);
+    await setTimeout(config.timeouts.medium);
 
     // Start scrolling
     await browserService.autoScroll(page);
