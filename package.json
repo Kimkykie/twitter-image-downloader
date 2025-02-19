@@ -9,7 +9,6 @@
     "test": "jest",
     "lint": "eslint src/**/*.js"
   },
-<<<<<<< HEAD
   "keywords": [
     "twitter",
     "image",
@@ -17,24 +16,15 @@
     "puppeteer",
     "osint"
   ],
-=======
-  "keywords": ["twitter", "image", "downloader", "puppeteer", "osint"],
->>>>>>> origin
   "author": "",
   "license": "MIT",
   "dependencies": {
     "axios": "^1.7.2",
     "chalk": "^5.0.0",
-<<<<<<< HEAD
     "csv-writer": "^1.6.0",
     "dotenv": "^16.0.3",
     "inquirer": "^9.2.3",
     "puppeteer": "^24.2.1",
-=======
-    "dotenv": "^16.0.3",
-    "inquirer": "^9.2.3",
-    "puppeteer": "^20.4.0",
->>>>>>> origin
     "winston": "^3.8.2"
   },
   "devDependencies": {
