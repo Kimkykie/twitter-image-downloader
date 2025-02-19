@@ -4,13 +4,17 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 export default {
+  credentials: {
+    username: process.env.TWITTER_USERNAME,
+    password: process.env.TWITTER_PASSWORD
+  },
   urls: {
     login: process.env.LOGIN_URL || "https://x.com/i/flow/login",
     base: process.env.BASE_URL || "https://x.com",
   },
   selectors: {
     usernameInput: 'input[name="text"]',
-    nextButtonXPath: "//button[@role='button' and .//span[text()='Next']]",
+    nextButtonXPath: "xpath/.//button[@role='button' and .//span[text()='Next']]",
     passwordInput: 'input[name="password"]',
     loginButton: 'button[data-testid="LoginForm_Login_Button"]',
   },
