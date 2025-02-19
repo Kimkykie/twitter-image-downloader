@@ -110,6 +110,7 @@ class AuthService {
 
       await setTimeout(config.timeouts.medium);
 
+      // 1 minute timeout for password input in case captcha is triggered
       await page.waitForSelector(config.selectors.passwordInput, {
         timeout: 60000,
       });

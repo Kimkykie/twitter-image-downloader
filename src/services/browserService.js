@@ -63,49 +63,64 @@ class BrowserService {
    */
   async autoScroll(page) {
     try {
-      await page.evaluate(async () => {
-        await new Promise((resolve, reject) => {
-          let previousHeight = 0;
-          let noChangeCount = 0;
-          const maxNoChange = 10; // Stop after 10 attempts with no new content
-          const scrollDelay = 1000; // 1 second between scrolls
+      const result = await page.evaluate(async () => {
+        return await new Promise((resolve) => {
+          let totalHeight = 0;
+          let distance = 800;
+          let timer = null;
+          let noNewContentCount = 0;
+          const maxNoNewContent = 5;
 
-          const scrollInterval = setInterval(async () => {
-            try {
-              const currentHeight = document.documentElement.scrollHeight;
+          const scroll = async () => {
+            const previousHeight = document.documentElement.scrollHeight;
 
-              // Scroll by a reasonable amount
-              window.scrollBy(0, 800);
+            window.scrollBy(0, distance);
+            await new Promise(r => setTimeout(r, 1000));
 
-              // Wait for potential content load
-              await new Promise(r => setTimeout(r, scrollDelay));
+            totalHeight += distance;
+            const currentHeight = document.documentElement.scrollHeight;
 
-              // Check if we've reached the bottom
-              if (currentHeight === previousHeight) {
-                noChangeCount++;
-                if (noChangeCount >= maxNoChange) {
-                  clearInterval(scrollInterval);
-                  resolve();
-                  return;
-                }
-              } else {
-                // Reset counter if height changed (new content loaded)
-                noChangeCount = 0;
-                previousHeight = currentHeight;
+            // Check if we've reached the bottom
+            if (currentHeight === previousHeight) {
+              noNewContentCount++;
+              if (noNewContentCount >= maxNoNewContent) {
+                clearInterval(timer);
+                resolve({
+                  success: true,
+                  reason: 'Reached bottom of page',
+                  totalScrolled: totalHeight
+                });
+                return;
               }
-            } catch (error) {
-              clearInterval(scrollInterval);
-              reject(error);
+            } else {
+              noNewContentCount = 0;
             }
-          }, scrollDelay);
+
+            // Safety check - if we've been scrolling for too long
+            if (totalHeight > 1000000) { // ~1 million pixels
+              clearInterval(timer);
+              resolve({
+                success: false,
+                reason: 'Maximum scroll height reached',
+                totalScrolled: totalHeight
+              });
+              return;
+            }
+          };
+
+          timer = setInterval(scroll, 1000);
         });
       });
-
       process.stdout.write('\n');
-      logger.info('Auto-scroll complete');
+      logger.info(`Auto-scroll complete: ${result.reason}`);
+      return result;
+
     } catch (error) {
       logger.error('Error during auto-scroll:', error);
-      throw error;
+      return {
+        success: false,
+        reason: 'Error during scroll: ' + error.message
+      };
     }
   }
 

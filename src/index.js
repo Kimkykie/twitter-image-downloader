@@ -1,4 +1,4 @@
-// src/index.js
+// index.js
 import Inquirer from 'inquirer';
 import { setTimeout } from 'node:timers/promises';
 import authService from './services/authService.js';
@@ -10,9 +10,41 @@ import { createImageDirectory } from './utils/fileSystem.js';
 
 const MAX_RETRIES = 3;
 
-/**
- * Gets credentials from env or prompts user
- */
+async function attemptLogin(page) {
+  // First try to load cookies
+  const cookiesLoaded = await authService.loadCookies(page);
+
+  if (cookiesLoaded) {
+    // Verify if cookies are still valid
+    const isLoggedIn = await authService.isLoggedIn(page);
+    if (isLoggedIn) {
+      logger.info('Successfully logged in using saved cookies');
+      return true;
+    }
+    logger.warn('Saved cookies are invalid');
+  }
+
+  // If we reach here, we need fresh credentials
+  const credentials = await getCredentials();
+
+  // Attempt login with retries
+  for (let retries = 0; retries < MAX_RETRIES; retries++) {
+    try {
+      await authService.loginToTwitter(page, credentials.loginUsername, credentials.loginPassword);
+      return true;
+    } catch (error) {
+      logger.warn(`Login attempt failed (${retries + 1}/${MAX_RETRIES})`);
+      if (retries === MAX_RETRIES - 1) {
+        logger.error("Max login retries reached");
+        return false;
+      }
+      await setTimeout(config.timeouts.medium * (retries + 1));
+    }
+  }
+
+  return false;
+}
+
 async function getCredentials() {
   if (config.credentials.username && config.credentials.password) {
     logger.info('Using credentials from environment variables');
@@ -38,46 +70,33 @@ async function getCredentials() {
   ]);
 }
 
-/**
- * Main function to fetch Twitter images.
- */
-async function getTwitterImages(accountToFetch, username, password, browser, page) {
+async function processAccount(accountToFetch, page) {
   try {
     createImageDirectory(accountToFetch);
 
-    // Login with retries
-    for (let retries = 0; retries < MAX_RETRIES; retries++) {
-      try {
-        await authService.loginToTwitter(page, username, password);
-        break;
-      } catch (error) {
-        logger.warn(`Retrying login (${retries + 1}/${MAX_RETRIES})`);
-        if (retries === MAX_RETRIES - 1) {
-          logger.error("Max retries reached. Exiting...");
-          return false;
-        }
-      }
-    }
-
-    // Setup listeners after successful login
+    // Setup image download listeners
     imageService.setupImageDownloadListeners(page, accountToFetch);
 
     // Navigate to media page and wait for load
     await imageService.navigateToMediaPage(page, accountToFetch);
-
-    // Wait for initial media content to load
     await setTimeout(config.timeouts.medium);
 
-    // Start scrolling
-    await browserService.autoScroll(page);
+    // Start scrolling with improved termination check
+    let scrollResult = await browserService.autoScroll(page);
+    if (!scrollResult.success) {
+      logger.warn(`Auto-scroll terminated early: ${scrollResult.reason}`);
+    }
 
-    // Give time for any pending downloads to complete
-    await new Promise(resolve => setTimeout(resolve, 5000));
+    await setTimeout(config.timeouts.long);
 
+    // Cleanup and generate reports
+    await imageService.cleanup(page);
+
+    await setTimeout(config.timeouts.long);
 
     return true;
   } catch (error) {
-    logger.error('Error in download process:', error);
+    logger.error('Error processing account:', error);
     return false;
   }
 }
@@ -87,67 +106,55 @@ async function main() {
   let page = null;
 
   try {
-    // Initialize browser once
     browser = await browserService.launchBrowser();
     page = await browserService.setupPage(browser);
 
-    // Get credentials first
-    const credentials = await getCredentials();
+    // First handle authentication
+    const loginSuccess = await attemptLogin(page);
+    if (!loginSuccess) {
+      logger.error('Failed to authenticate');
+      return;
+    }
 
-    // Setup for continuous downloads
+    // Main download loop
     let continueDownloading = true;
     while (continueDownloading) {
-      const { targetUsername } = await Inquirer.prompt([
-        {
-          type: "input",
-          message: "Enter the X account handle to fetch media from: ",
-          name: "targetUsername",
-          validate: input => {
-            if (!input.length) return 'Account handle cannot be empty';
-            const username = input.startsWith('@') ? input.slice(1) : input;
-            if (username.length > 15) return 'Username too long';
-            if (!/^[a-zA-Z0-9_]+$/.test(username)) return 'Invalid username format';
-            return true;
-          }
+      const { targetUsername } = await Inquirer.prompt([{
+        type: "input",
+        message: "Enter the X account handle to fetch media from: ",
+        name: "targetUsername",
+        validate: input => {
+          if (!input.length) return 'Account handle cannot be empty';
+          const username = input.startsWith('@') ? input.slice(1) : input;
+          if (username.length > 15) return 'Username too long';
+          if (!/^[a-zA-Z0-9_]+$/.test(username)) return 'Invalid username format';
+          return true;
         }
-      ]);
+      }]);
 
-      console.log('\nStarting download process...\n');
-
-      const success = await getTwitterImages(
-        targetUsername,
-        credentials.loginUsername,
-        credentials.loginPassword,
-        browser,
-        page
-      );
+      const success = await processAccount(targetUsername, page);
 
       if (!success) {
-        logger.warn(`Failed to complete download for ${targetUsername}`);
+        logger.warn(`Failed to process account: ${targetUsername}`);
       }
 
       // Add delay before the continue prompt
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await setTimeout(config.timeouts.long);
 
-      // Ask about continuing
-      const { continue: shouldContinue } = await Inquirer.prompt([
-        {
-          type: 'confirm',
-          name: 'continue',
-          message: 'Would you like to fetch media from another account?',
-          default: false
-        }
-      ]);
+      // Clear prompt and ask about continuing
+      // console.clear();
+      const { shouldContinue } = await Inquirer.prompt([{
+        type: 'confirm',
+        name: 'shouldContinue',
+        message: 'Would you like to fetch media from another account?',
+        default: false
+      }]);
 
       continueDownloading = shouldContinue;
-      if (continueDownloading) {
-        console.clear();
-      }
     }
   } catch (error) {
     logger.error('Fatal application error:', error);
   } finally {
-    // Only cleanup when we're completely done
     if (browser) {
       await browserService.cleanup();
     }

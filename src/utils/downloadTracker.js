@@ -66,8 +66,13 @@ class DownloadTracker {
   }
 
   async exportToCsv(username) {
+    if (!username) {
+      logger.error('Cannot export CSV: No username provided');
+      return;
+    }
+
     if (this.downloadHistory.length === 0) {
-      logger.info('\nNo download history to export');
+      logger.info('No download history to export');
       return;
     }
 
@@ -82,7 +87,7 @@ class DownloadTracker {
       ensureDirectoryExists(logsDir);
 
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const csvPath = path.join(logsDir, `download_history_${timestamp}.csv`);
+      const csvPath = path.join(logsDir, `${username}_${timestamp}.csv`);
 
       const csvWriter = createObjectCsvWriter({
         path: csvPath,
@@ -94,11 +99,36 @@ class DownloadTracker {
         ]
       });
 
-      await csvWriter.writeRecords(this.downloadHistory);
-      logger.success(`\nDownload history exported to: ${chalk.underline(csvPath)}`);
+      // Ensure the directory exists before writing
+      ensureDirectoryExists(path.dirname(csvPath));
+
+      // Write records with error handling
+      try {
+        await csvWriter.writeRecords(this.downloadHistory);
+        logger.success(`Download history exported to: ${csvPath}`);
+      } catch (writeError) {
+        throw new Error(`Failed to write CSV: ${writeError.message}`);
+      }
 
     } catch (error) {
-      logger.error('\nFailed to export download history:', error);
+      logger.error('Failed to export download history:', error);
+      // Attempt to write to a fallback location
+      try {
+        const fallbackPath = path.join(process.cwd(), `download_history_${username}_${Date.now()}.csv`);
+        const csvWriter = createObjectCsvWriter({
+          path: fallbackPath,
+          header: [
+            {id: 'filename', title: 'FILENAME'},
+            {id: 'url', title: 'URL'},
+            {id: 'status', title: 'STATUS'},
+            {id: 'timestamp', title: 'TIMESTAMP'}
+          ]
+        });
+        await csvWriter.writeRecords(this.downloadHistory);
+        logger.warn(`Exported to fallback location: ${fallbackPath}`);
+      } catch (fallbackError) {
+        logger.error('Failed to write to fallback location:', fallbackError);
+      }
     }
   }
 
