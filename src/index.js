@@ -1,25 +1,31 @@
 // index.js
 import Inquirer from 'inquirer';
-import { setTimeout as sleep } from 'node:timers/promises'; // Renamed for clarity
+import { setTimeout as sleep } from 'node:timers/promises';
 import authService from './services/authService.js';
 import browserService from './services/browserService.js';
 import imageService from './services/imageService.js';
 import logger from './utils/logger.js';
 import config from './config/config.js';
-// createImageDirectory is no longer directly used here, it's called within imageService
-// import { createImageDirectory } from './utils/fileSystem.js';
+import fs from 'fs';
+import path from 'path';
 
-const MAX_LOGIN_RETRIES = 3; // Renamed for clarity
+const MAX_LOGIN_RETRIES = 3;
 
 async function attemptLogin(page) {
   const cookiesLoaded = await authService.loadCookies(page);
   if (cookiesLoaded) {
-    const isLoggedIn = await authService.isLoggedIn(page);
-    if (isLoggedIn) {
-      logger.info('Successfully logged in using saved cookies.');
-      return true;
+    logger.info('Attempting to navigate to base URL to verify session...');
+    try {
+      await page.goto(config.urls.base, { waitUntil: 'networkidle2', timeout: config.timeouts.navigation });
+      const isLoggedIn = await authService.isLoggedIn(page);
+      if (isLoggedIn) {
+        logger.info('Successfully logged in using saved cookies.');
+        return true;
+      }
+      logger.warn('Saved cookies are invalid, expired, or session check failed. Attempting fresh login.');
+    } catch (navError) {
+      logger.warn(`Error navigating to base URL with cookies: ${navError.message}. Proceeding with fresh login.`);
     }
-    logger.warn('Saved cookies are invalid or expired. Attempting fresh login.');
   } else {
     logger.info('No saved cookies found. Proceeding with manual login.');
   }
@@ -28,17 +34,24 @@ async function attemptLogin(page) {
   for (let retries = 0; retries < MAX_LOGIN_RETRIES; retries++) {
     try {
       await authService.loginToTwitter(page, credentials.loginUsername, credentials.loginPassword);
-      return true; // Login successful
+      const isLoggedInAfterFreshLogin = await authService.isLoggedIn(page);
+      if (isLoggedInAfterFreshLogin) {
+        logger.info('Fresh login successful.');
+        return true;
+      }
+      // If loginToTwitter didn't throw but isLoggedIn is false, it's a soft failure.
+      logger.warn(`Login attempt ${retries + 1}/${MAX_LOGIN_RETRIES} completed, but still not logged in.`);
+      // Fall through to retry or error
     } catch (error) {
       logger.warn(`Login attempt ${retries + 1}/${MAX_LOGIN_RETRIES} failed: ${error.message}`);
-      if (retries === MAX_LOGIN_RETRIES - 1) {
-        logger.error("Maximum login retries reached. Please check credentials or network.");
-        return false; // Max retries reached
-      }
-      await sleep(config.timeouts.medium * (retries + 1)); // Exponential backoff
+    }
+    if (retries < MAX_LOGIN_RETRIES - 1) {
+      logger.info(`Waiting ${config.timeouts.medium / 1000}s before next login attempt.`);
+      await sleep(config.timeouts.medium * (retries + 1)); // Exponential backoff might be too long here
     }
   }
-  return false; // Should not be reached if loop logic is correct
+  logger.error("Maximum login retries reached. Please check credentials or network.");
+  return false;
 }
 
 async function getCredentials() {
@@ -53,9 +66,9 @@ async function getCredentials() {
   return await Inquirer.prompt([
     {
       type: "input",
-      message: "Login: Enter X (Twitter) Username: ",
+      message: "Login: Enter X (Twitter) Username/Email: ",
       name: "loginUsername",
-      validate: input => input.trim().length > 0 ? true : 'Username cannot be empty.'
+      validate: input => input.trim().length > 0 ? true : 'Username/Email cannot be empty.'
     },
     {
       type: "password",
@@ -68,29 +81,98 @@ async function getCredentials() {
 }
 
 async function processAccount(accountToFetch, page) {
-  // accountToFetch is already cleaned (no '@') when passed to this function
+  const cleanedUsername = accountToFetch.trim().replace(/^@/, "");
+  if (!cleanedUsername) {
+    logger.warn("Empty username provided, skipping.");
+    return false;
+  }
+  logger.info(`Preparing to process account: @${cleanedUsername}`);
   try {
-    // createImageDirectory is now called within imageService methods if needed.
-    // The main logic is now encapsulated in fetchAllImagesForUser
-    await imageService.fetchAllImagesForUser(page, accountToFetch);
-
-    // A short delay here before prompting for the next account might be good for UX.
-    await sleep(config.timeouts.medium);
+    await imageService.fetchAllImagesForUser(page, cleanedUsername);
+    logger.info(`Finished processing for account: @${cleanedUsername}`);
+    // A short delay here before processing the next account (if any) or prompting.
+    await sleep(config.timeouts.short);
     return true;
   } catch (error) {
-    // Log the specific account that failed, and the error.
-    logger.error(`Error processing account @${accountToFetch}: ${error.message}`, error.stack);
-    // Ensure some cleanup or reset in imageService if a fatal error occurs mid-processing for an account
+    logger.error(`Critical error processing account @${cleanedUsername}: ${error.message}`, error.stack);
+    // Ensure cleanup for the specific user if a major error occurs within fetchAllImagesForUser
     // imageService.cleanup() is called at the end of fetchAllImagesForUser,
-    // but if fetchAllImagesForUser itself throws an unhandled error before its own cleanup,
-    // this provides an additional layer.
-    if (imageService.currentUsername === accountToFetch) { // Only cleanup if it's the one being processed
-        logger.warn(`Performing cleanup for @${accountToFetch} due to error during processing.`);
-        await imageService.cleanup();
+    // but this is an additional safeguard.
+    if (imageService.currentUsername === cleanedUsername) {
+      logger.warn(`Performing emergency cleanup for @${cleanedUsername} due to error during its processing.`);
+      await imageService.cleanup(); // This will write out any partial CSV for this user.
     }
     return false;
   }
 }
+
+async function getAccountList() {
+  const { inputType } = await Inquirer.prompt([{
+    type: 'list',
+    name: 'inputType',
+    message: 'How do you want to provide account names?',
+    choices: [
+      { name: 'Enter a single account name', value: 'single' },
+      { name: 'Enter a comma-separated list of account names', value: 'list' },
+      { name: 'Get list of accounts from accounts.txt (one account per line)', value: 'file' }
+    ]
+  }]);
+
+  let accounts = [];
+
+  if (inputType === 'single') {
+    const { singleAccount } = await Inquirer.prompt([{
+      type: "input",
+      message: "Enter the X account handle (e.g., @username or username):",
+      name: "singleAccount",
+      validate: input => {
+        const trimmedInput = input.trim().replace(/^@/, "");
+        if (!trimmedInput.length) return 'Account handle cannot be empty.';
+        if (trimmedInput.length > 15) return 'Username must be 1-15 characters long.';
+        if (!/^[a-zA-Z0-9_]+$/.test(trimmedInput)) return 'Invalid username format.';
+        return true;
+      }
+    }]);
+    accounts.push(singleAccount.trim().replace(/^@/, ""));
+  } else if (inputType === 'list') {
+    const { accountListStr } = await Inquirer.prompt([{
+      type: "input",
+      message: "Enter comma-separated account handles (e.g., user1, @user2, user3):",
+      name: "accountListStr",
+      validate: input => input.trim().length > 0 ? true : 'Account list cannot be empty.'
+    }]);
+    accounts = accountListStr.split(',').map(acc => acc.trim().replace(/^@/, "")).filter(acc => acc.length > 0);
+  } else if (inputType === 'file') {
+
+    const filePath = path.resolve(process.cwd(), 'accounts.txt');
+
+    if (!fs.existsSync(filePath)) {
+      logger.error(`accounts.txt not found at ${filePath}`);
+      return []; // Return empty if file is missing
+    }
+
+    logger.info('Reading from accounts.txt (one account name per line, without @ symbol)...');
+
+    try {
+      const fileContent = fs.readFileSync(filePath, 'utf-8');
+      accounts = fileContent
+        .split(/\r?\n/)
+        .map(acc => acc.trim().replace(/^@/, ""))
+        .filter(acc => acc.length > 0);
+    } catch (error) {
+      logger.error(`Error reading file ${filePath}: ${error.message}`);
+      return []; // Return empty if file error
+    }
+  }
+
+  if (accounts.length === 0 && inputType !== 'file') { // For file, error is already logged
+    logger.warn("No valid account names were provided.");
+  } else if (accounts.length > 0) {
+    logger.info(`Found ${accounts.length} accounts to process: ${accounts.join(', ')}`);
+  }
+  return accounts;
+}
+
 
 async function main() {
   let browser = null;
@@ -104,41 +186,39 @@ async function main() {
     const loginSuccess = await attemptLogin(page);
     if (!loginSuccess) {
       logger.error('Failed to authenticate. Exiting application.');
-      // No browser cleanup here yet, finally block will handle it.
-      return; // Exit main if login fails
+      return;
     }
 
     let continueDownloading = true;
     while (continueDownloading) {
-      const { targetUsernameInput } = await Inquirer.prompt([{
-        type: "input",
-        message: "Enter the X account handle to fetch media from (e.g., @username or username):",
-        name: "targetUsernameInput", // Changed name to avoid conflict
-        validate: input => {
-          const trimmedInput = input.trim();
-          if (!trimmedInput.length) return 'Account handle cannot be empty.';
-          const username = trimmedInput.startsWith('@') ? trimmedInput.slice(1) : trimmedInput;
-          if (username.length === 0 || username.length > 15) return 'Username must be 1-15 characters long.';
-          if (!/^[a-zA-Z0-9_]+$/.test(username)) return 'Invalid username format (only letters, numbers, and underscores).';
-          return true;
+      const accountsToProcess = await getAccountList();
+
+      if (accountsToProcess.length > 0) {
+        for (const account of accountsToProcess) {
+          const success = await processAccount(account, page);
+          if (!success) {
+            logger.warn(`Could not complete processing for account: @${account}. Moving to next if available.`);
+          } else {
+            logger.info(`Successfully finished processing for account: @${account}.`);
+          }
+          // Optional: Add a longer, random delay between processing different accounts
+          if (accountsToProcess.indexOf(account) < accountsToProcess.length - 1) {
+            const interAccountDelay = Math.floor(Math.random() * (config.timeouts.long - config.timeouts.medium + 1)) + config.timeouts.medium;
+            logger.info(`Waiting for ${interAccountDelay / 1000}s before processing the next account...`);
+            await sleep(interAccountDelay);
+          }
         }
-      }]);
-
-      const cleanedUsername = targetUsernameInput.trim().startsWith('@') ? targetUsernameInput.trim().slice(1) : targetUsernameInput.trim();
-      const success = await processAccount(cleanedUsername, page);
-
-      if (!success) {
-        logger.warn(`Could not complete processing for account: @${cleanedUsername}`);
+        logger.info("Finished processing all accounts in the current list.");
       } else {
-        logger.info(`Successfully processed account: @${cleanedUsername}`);
+        logger.info("No accounts were provided or found in the list/file to process in this round.");
       }
 
-      await sleep(config.timeouts.short); // Brief pause before asking to continue
+      await sleep(config.timeouts.short);
 
       const { shouldContinue } = await Inquirer.prompt([{
         type: 'confirm',
         name: 'shouldContinue',
-        message: 'Would you like to fetch media from another account?',
+        message: 'Would you like to fetch media from another account or list of accounts?',
         default: false
       }]);
       continueDownloading = shouldContinue;
@@ -147,54 +227,56 @@ async function main() {
       }
     }
   } catch (error) {
-    // Catch any unhandled errors from the main execution block
     logger.error('Fatal application error in main:', error.message, error.stack);
   } finally {
     logger.info("Initiating application cleanup...");
-    // Ensure imageService cleanup is called if a user was being processed or if an error occurred.
-    // imageService.cleanup() is generally called at the end of fetchAllImagesForUser.
-    // This is a safety net.
-    if (imageService.currentUsername) {
-        logger.warn(`Performing final cleanup for image service related to @${imageService.currentUsername} due to application exit.`);
-        await imageService.cleanup(); // Ensures CSV and summary are written for the last processed user
-    }
-
-    if (browser) {
-      await browserService.cleanup(); // Closes browser and page
+    // imageService.cleanup() is called after each user in processAccount.
+    // This final cleanup is more for the browser.
+    if (browserService.browser) { // Use the getter from the service
+      await browserService.cleanup();
     }
     logger.info("Application finished and resources cleaned up. Exiting.");
-    process.exit(0); // Ensure the process exits cleanly
+    // process.exit(0); // Let Node.js exit naturally unless error
   }
 }
 
 // Graceful shutdown handlers
 async function gracefulShutdown(signal) {
   logger.info(`Received ${signal}. Initiating graceful shutdown...`);
-  // Try to clean up image service first, as it might have pending writes (CSV)
-  if (imageService.currentUsername) {
-    logger.warn(`Performing image service cleanup for @${imageService.currentUsername} due to ${signal}.`);
-    await imageService.cleanup();
+  // Try to clean up image service first if a user was actively being processed
+  // This is tricky because imageService.cleanup() is user-specific.
+  // The cleanup within processAccount and the final browser cleanup should mostly cover it.
+  if (imageService.currentUsername && imageService.downloadQueueSize > 0) {
+    logger.warn(`Downloads were in progress for @${imageService.currentUsername}. Attempting to wait briefly...`);
+    await sleep(config.timeouts.medium); // Give a moment for current downloads
   }
-  if (browserService.browser) { // Check if browser was initialized
+  // If imageService has a specific user context, it might try to save its CSV.
+  if (imageService.currentUsername) {
+    logger.warn(`Performing final image service cleanup for @${imageService.currentUsername} due to ${signal}.`);
+    await imageService.cleanup(); // This will attempt to write CSV for the current user.
+  }
+
+  if (browserService.browser) {
     await browserService.cleanup();
   }
-  logger.info("Graceful shutdown complete. Exiting.");
-  process.exit(0);
+  logger.info("Graceful shutdown attempt complete. Exiting.");
+  process.exit(0); // Force exit after cleanup attempt
 }
 
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
-// Start application
-main().catch(async error => {
-  // This catch is for unhandled promise rejections from main() itself,
-  // though the try/finally in main should handle most cases.
-  logger.error('Unhandled promise rejection in main execution:', error.message, error.stack);
+main().then(() => {
+  logger.info("Main execution completed.");
+  // process.exit(0); // If no errors, exit cleanly.
+}).catch(async error => {
+  logger.error('Unhandled promise rejection in main execution chain:', error.message, error.stack);
+  // Attempt last-ditch cleanup
   if (imageService.currentUsername) {
-    await imageService.cleanup();
+    try { await imageService.cleanup(); } catch (e) { logger.error("Error during emergency imageService cleanup:", e); }
   }
   if (browserService.browser) {
-    await browserService.cleanup();
+    try { await browserService.cleanup(); } catch (e) { logger.error("Error during emergency browserService cleanup:", e); }
   }
   process.exit(1); // Exit with error code
 });
