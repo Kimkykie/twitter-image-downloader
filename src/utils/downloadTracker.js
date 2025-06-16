@@ -12,15 +12,35 @@ class DownloadTracker {
   }
 
   reset() {
-    this.totalFound = 0;      // Total images found while scrolling
+    this.totalFound = 0;         // Total images identified from tweets
     this.downloadedImages = 0;
     this.skippedImages = 0;
     this.failedImages = 0;
-    this.downloadHistory = [];
+    this.failedTweetProcessing = 0; // New counter for tweets that couldn't be processed
+    this.downloadHistory = [];   // Stores ImageInfo objects
   }
 
+  /**
+   * Updates the download progress.
+   * @param {('downloaded'|'skipped'|'failed'|'failed_tweet_processing')} status - The status of the image operation.
+   * @param {import('../services/imageService.js').ImageInfo} imageInfo - Information about the image.
+   */
   updateProgress(status, imageInfo) {
-    this.totalFound++;
+    // Only increment totalFound for actual image items, not tweet processing failures
+    if (status !== 'failed_tweet_processing') {
+        this.totalFound++;
+    }
+
+    let logEntry = {
+      filename: imageInfo.filename || 'N/A',
+      image_url: imageInfo.url || 'N/A', // Renamed from 'url' to 'image_url' for clarity in CSV
+      status: status,
+      status_reason: imageInfo.status_reason || '',
+      tweet_url: imageInfo.tweetUrl,
+      tweet_id: imageInfo.tweetId,
+      tweet_date: imageInfo.tweetDate, // Should be ISO string or 'N/A'
+      timestamp: new Date().toISOString()
+    };
 
     switch(status) {
       case 'downloaded':
@@ -32,47 +52,50 @@ class DownloadTracker {
       case 'failed':
         this.failedImages++;
         break;
+      case 'failed_tweet_processing':
+        this.failedTweetProcessing++;
+        // For failed tweet processing, some imageInfo fields might be N/A
+        logEntry.status_reason = imageInfo.status_reason || 'Tweet processing failed';
+        break;
     }
 
-    this.downloadHistory.push({
-      filename: imageInfo.filename,
-      url: imageInfo.url,
-      status,
-      timestamp: new Date().toISOString()
-    });
-
+    this.downloadHistory.push(logEntry);
     this.logProgress();
   }
 
   logProgress() {
-    process.stdout.clearLine();
-    process.stdout.cursorTo(0);
+    // Debounce logging to avoid excessive stdout writes if many images are processed quickly
+    if (this.logTimeout) clearTimeout(this.logTimeout);
 
-    // Instead of a progress bar, show live counters with status indicators
-    const stats = [
-      `${chalk.blue('Found:')} ${this.totalFound}`,
-      `${chalk.green('✓')} ${this.downloadedImages}`,
-      `${chalk.yellow('⇢')} ${this.skippedImages}`,
-      `${chalk.red('⨯')} ${this.failedImages}`
-    ].join(' | ');
+    this.logTimeout = setTimeout(() => {
+        process.stdout.clearLine(0); // Clear current line
+        process.stdout.cursorTo(0);  // Move cursor to beginning of line
 
-    // Add spinning cursor to indicate active scanning
-    const spinners = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-    const spinner = spinners[this.totalFound % spinners.length];
+        const stats = [
+        `${chalk.blueBright('Tweets Processed:')} (approx. ${this.downloadHistory.filter(item => item.status !== 'failed_tweet_processing' || this.downloadHistory.map(i => i.tweet_url).includes(item.tweet_url)).map(item => item.tweet_url).filter((v, i, a) => a.indexOf(v) === i).length})`, // Approximation
+        `${chalk.cyan('Images Found:')} ${this.totalFound}`,
+        `${chalk.green('Downloaded:')} ${this.downloadedImages} ${chalk.green('✓')}`,
+        `${chalk.yellow('Skipped:')} ${this.skippedImages} ${chalk.yellow('⇢')}`,
+        `${chalk.red('Img Failed:')} ${this.failedImages} ${chalk.red('⨯')}`,
+        ].join(' | ');
 
-    process.stdout.write(
-      `\r${chalk.cyan(spinner)} Scanning... ${stats}`
-    );
+        const spinners = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+        // Use a combination of counts to ensure spinner keeps moving
+        const spinnerIndex = (this.downloadedImages + this.skippedImages + this.failedImages + this.failedTweetProcessing) % spinners.length;
+        const spinner = spinners[spinnerIndex];
+
+        process.stdout.write(`${chalk.cyan(spinner)} Progress: ${stats}`);
+    }, 100); // Update console log at most every 100ms
   }
 
   async exportToCsv(username) {
     if (!username) {
-      logger.error('Cannot export CSV: No username provided');
+      logger.error('Cannot export CSV: No username provided for context.');
       return;
     }
 
     if (this.downloadHistory.length === 0) {
-      logger.info('No download history to export');
+      logger.info(`No download history to export for @${username}.`);
       return;
     }
 
@@ -87,63 +110,44 @@ class DownloadTracker {
       ensureDirectoryExists(logsDir);
 
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const csvPath = path.join(logsDir, `${username}_${timestamp}.csv`);
+      const csvPath = path.join(logsDir, `${username}_download_log_${timestamp}.csv`);
 
-      const csvWriter = createObjectCsvWriter({
+      const csvWriterInstance = createObjectCsvWriter({
         path: csvPath,
         header: [
           {id: 'filename', title: 'FILENAME'},
-          {id: 'url', title: 'URL'},
+          {id: 'image_url', title: 'IMAGE_URL'},
           {id: 'status', title: 'STATUS'},
-          {id: 'timestamp', title: 'TIMESTAMP'}
+          {id: 'status_reason', title: 'STATUS_REASON'},
+          {id: 'tweet_url', title: 'TWEET_URL'},
+          {id: 'tweet_id', title: 'TWEET_ID'},
+          {id: 'tweet_date', title: 'TWEET_DATE'}, // ISO Format
+          {id: 'timestamp', title: 'DOWNLOAD_TIMESTAMP'} // Log entry timestamp
         ]
       });
 
-      // Ensure the directory exists before writing
-      ensureDirectoryExists(path.dirname(csvPath));
-
-      // Write records with error handling
-      try {
-        await csvWriter.writeRecords(this.downloadHistory);
-        logger.success(`Download history exported to: ${csvPath}`);
-      } catch (writeError) {
-        throw new Error(`Failed to write CSV: ${writeError.message}`);
-      }
+      await csvWriterInstance.writeRecords(this.downloadHistory);
+      logger.success(`Download history for @${username} exported to: ${csvPath}`);
 
     } catch (error) {
-      logger.error('Failed to export download history:', error);
-      // Attempt to write to a fallback location
-      try {
-        const fallbackPath = path.join(process.cwd(), `download_history_${username}_${Date.now()}.csv`);
-        const csvWriter = createObjectCsvWriter({
-          path: fallbackPath,
-          header: [
-            {id: 'filename', title: 'FILENAME'},
-            {id: 'url', title: 'URL'},
-            {id: 'status', title: 'STATUS'},
-            {id: 'timestamp', title: 'TIMESTAMP'}
-          ]
-        });
-        await csvWriter.writeRecords(this.downloadHistory);
-        logger.warn(`Exported to fallback location: ${fallbackPath}`);
-      } catch (fallbackError) {
-        logger.error('Failed to write to fallback location:', fallbackError);
-      }
+      logger.error(`Failed to export download history for @${username}: ${error.message}`, error.stack);
+      // Fallback attempt could be added here if critical
     }
   }
 
-  printSummary() {
-    // Move to new line for summary
-    process.stdout.write('\n\n');
+  printSummary(username = "current session") {
+    if (this.logTimeout) clearTimeout(this.logTimeout); // Clear any pending log update
+    process.stdout.write('\n\n'); // Ensure summary starts on a new line
 
     const summaryBox = [
-      chalk.bold('Download Summary'),
-      '─'.repeat(50),
-      `${chalk.bold('Total images found:')} ${chalk.white(this.totalFound)}`,
+      chalk.bold.underline(`Download Summary for @${username}`),
+      '─'.repeat(60),
+      `${chalk.bold('Total unique images identified:')} ${chalk.white(this.totalFound)}`,
       `${chalk.bold('Successfully downloaded:')} ${chalk.green(this.downloadedImages)} ${chalk.green('✓')}`,
-      `${chalk.bold('Skipped (already exists):')} ${chalk.yellow(this.skippedImages)} ${chalk.yellow('⇢')}`,
-      `${chalk.bold('Failed downloads:')} ${chalk.red(this.failedImages)} ${chalk.red('⨯')}`,
-      '─'.repeat(50)
+      `${chalk.bold('Skipped (e.g., already exists):')} ${chalk.yellow(this.skippedImages)} ${chalk.yellow('⇢')}`,
+      `${chalk.bold('Failed image downloads:')} ${chalk.red(this.failedImages)} ${chalk.red('⨯')}`,
+      `${chalk.bold('Failed tweet processing (no images):')} ${chalk.magenta(this.failedTweetProcessing)} ${chalk.magenta('!')}`,
+      '─'.repeat(60)
     ].join('\n');
 
     console.log(summaryBox);
