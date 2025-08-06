@@ -1,161 +1,107 @@
-# 🐦 Twitter Timeline Image Downloader
+# Twitter Timeline Image Downloader
 
-A powerful CLI tool designed for OSINT practitioners to efficiently download media content from Twitter/X profiles.
+Download images from Twitter/X profiles via CLI. Built for OSINT workflows.
 
-## ✨ Key Features
+<img src="https://i.imgur.com/ytCJ2eA.png" alt="Tool Screenshot" />
 
-- 🔐 Smart Session Management
-  - Automated login with cookie persistence
-  - Secure credential handling via environment variables
-  - Captcha-aware authentication process
-- 📸 Efficient Media Scraping
-  - Automatic scrolling to load all media
-  - Parallel download management
-  - Duplicate detection
-- 📊 Comprehensive Logging
-  - Detailed download statistics
-  - CSV export of download history
-  - Visual progress tracking
-- 🔄 Continuous Operation
-  - Multiple account processing in one session
-  - Session persistence between runs
-  - Graceful error handling
+## Problem
 
-## 🚀 Getting Started
+Need to archive media from Twitter profiles for research or backup. Manual downloading is tedious, and most existing tools break frequently due to Twitter's anti-automation measures.
 
-### Prerequisites
+## Solution
 
-- Node.js (v14 or higher)
-- npm (comes with Node.js)
-- A Twitter/X account
+Automated browser-based scraper that handles authentication, infinite scroll, and bulk downloads. Uses session persistence to minimize login friction and includes smart rate limiting to avoid blocks.
 
-### Installation
+## Quick Start
 
-1. Clone the repository:
 ```bash
 git clone https://github.com/Kimkykie/twitter-image-downloader.git
 cd twitter-image-downloader
-```
-
-2. Install dependencies:
-```bash
 npm install
 ```
 
-3. Set up your environment:
+Set up environment:
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env` with your preferred settings:
+**Important**: Set `PUPPETEER_HEADLESS=false` for first run (Twitter CAPTCHA handling).
+
+```bash
+npm start
+```
+
+## How it works
+
+1. **Authentication** - Automated login with cookie persistence
+2. **Timeline parsing** - Infinite scroll to load all media posts
+3. **Download queue** - Parallel downloads with duplicate detection
+4. **Progress tracking** - Real-time stats and CSV export
+
+Authentication cookies are saved in `cookies.json`. Delete this file to force re-authentication.
+
+## Configuration
+
+Edit `.env`:
 ```env
-TWITTER_USERNAME=your_username  # Optional
-TWITTER_PASSWORD=your_password  # Optional
-PUPPETEER_HEADLESS=false       # Set to false for first login
+TWITTER_USERNAME=your_username    # Optional - will prompt if missing
+TWITTER_PASSWORD=your_password    # Optional - will prompt if missing  
+PUPPETEER_HEADLESS=false         # Keep false until authenticated
+VIEWPORT_WIDTH=1366              # Browser dimensions
+VIEWPORT_HEIGHT=768
 ```
 
-### ⚠️ Important First-Time Setup
+## Project Structure
 
-For your first run, ensure `PUPPETEER_HEADLESS=false` in your `.env` file. This is crucial because:
-
-1. Twitter often requires CAPTCHA verification on first login
-2. You need to see the browser to complete the verification
-3. Once verified, cookies are saved and future runs can be headless
-
-<img src="assets/authentication.png" alt="Captcha Example" />
-
-## 💻 Usage
-
-### First Run
-
-1. Start the tool:
-```bash
-npm start
+```
+src/
+├── config/config.js           # App configuration
+├── services/
+│   ├── authService.js         # Login/session handling
+│   ├── browserService.js      # Puppeteer automation
+│   └── imageService.js        # Download management
+├── utils/
+│   ├── downloadTracker.js     # Progress tracking
+│   ├── logger.js              # Console output
+│   └── fileSystem.js          # File operations
+└── index.js                   # CLI entry point
 ```
 
-2. If credentials aren't in `.env`, you'll be prompted:
-<img src="assets/login.png" alt="Login Prompt" />
+## Output
 
-3. After successful login, your session is automatically saved. You won't need to login again until the session expires.
+- **Images**: `./images/{username}/`
+- **Download log**: CSV with metadata and status
+- **Session data**: `cookies.json` (auto-generated)
 
-4. Enter the target account handle and wait for downloads to complete.
+## Rate Limiting
 
-### Subsequent Runs
+Built-in throttling to avoid Twitter's anti-bot measures:
+- Request delays between page interactions
+- Automatic backoff on rate limit detection
+- Session rotation support
 
-1. Start the tool:
-```bash
-npm start
-```
+## Security Notes
 
-2. The tool automatically uses your saved session - no login needed!
+- Use a dedicated Twitter account for scraping
+- Cookies contain authentication tokens, treat as credentials
+- Consider VPN/proxy for large-scale operations
 
-3. Simply enter the target account handle and start downloading.
+## Contributing
 
-### During Downloads
+Focus areas:
+- Twitter layout changes (frequent breakage)
+- Alternative authentication methods
+- Performance optimization for large timelines
 
-- Monitor real-time progress in the terminal
-- View download counts (completed/skipped/failed)
-- Choose to download from another account when finished
+## Roadmap
 
-### 📊 Download Reports
+- [ ] GIF and MP4 download support  
+- [ ] Optimized downloading for high-volume accounts
 
-After each download, you'll get:
-- A summary in the console
-- A CSV file with detailed download history
-- Images saved in `./images/{username}/`
+## License
 
-<img src="assets/summary.png" alt="Download Summary" />
+MIT
 
-## 📁 Project Structure
-```
-twitter-image-downloader/
-├── src/
-│   ├── config/
-│   │   └── config.js         # Configuration setting
-│   ├── services/
-│   │   ├── authService.js    # Authentication handling
-│   │   ├── browserService.js # Browser automation
-│   │   └── imageService.js   # Image downloading
-│   ├── utils/
-│   │   ├── downloadTracker.js  # Download progress and history
-│   │   ├── logger.js         # Logging utilities
-│   │   └── fileSystem.js     # File operations
+---
 
-│   └── index.js              # Main application
-├── images/                    # Downloaded media
-├── .env.example              # Environment template
-└── package.json              # Dependencies
-```
-
-## ⚙️ Configuration Options
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| PUPPETEER_HEADLESS | Browser visibility | true |
-| TWITTER_USERNAME | X/Twitter username | null |
-| TWITTER_PASSWORD | X/Twitter password | null |
-| VIEWPORT_WIDTH | Browser width | 1366 |
-| VIEWPORT_HEIGHT | Browser height | 768 |
-
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit pull requests.
-
-## ⚠️ Important Notes
-
-### Session Management
-- Cookies are stored in `cookies.json`
-- Valid cookies = automatic login
-- Delete `cookies.json` to force new login
-
-### Rate Limiting
-- Tool includes built-in rate limiting
-- Respects Twitter's API constraints
-- Automatic throttling when needed
-
-### Security
-Consider using a dedicated account for scraping to protect your main account.
-
-## 📄 License
-
-[MIT](https://choosealicense.com/licenses/mit/)
+**Disclaimer**: Respect Twitter's Terms of Service and applicable laws. This tool is for research and archival purposes.
