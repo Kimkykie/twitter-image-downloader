@@ -7,3 +7,9 @@ variables.env
 browser_data/
 cookies.json
 .env
+
+# SQLite database
+data/
+
+# Claude Code local config
+.claude/
