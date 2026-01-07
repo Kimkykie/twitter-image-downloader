@@ -5,9 +5,11 @@ import chalk from 'chalk';
 import { createObjectCsvWriter } from 'csv-writer';
 import logger from './logger.js';
 import { ensureDirectoryExists } from './fileSystem.js';
+import { Mutex } from './semaphore.js';
 
 class DownloadTracker {
   constructor() {
+    this.mutex = new Mutex();  // For thread-safe counter updates
     this.reset();
   }
 
@@ -21,45 +23,52 @@ class DownloadTracker {
   }
 
   /**
-   * Updates the download progress.
+   * Updates the download progress (thread-safe).
    * @param {('downloaded'|'skipped'|'failed'|'failed_tweet_processing')} status - The status of the image operation.
    * @param {import('../services/imageService.js').ImageInfo} imageInfo - Information about the image.
    */
   updateProgress(status, imageInfo) {
-    // Only increment totalFound for actual image items, not tweet processing failures
-    if (status !== 'failed_tweet_processing') {
-        this.totalFound++;
-    }
+    // Use mutex for thread-safe counter updates (fire-and-forget to not block callers)
+    this.mutex.withLock(() => {
+      // Only increment totalFound for actual image items, not tweet processing failures
+      if (status !== 'failed_tweet_processing') {
+          this.totalFound++;
+      }
 
-    let logEntry = {
-      filename: imageInfo.filename || 'N/A',
-      image_url: imageInfo.url || 'N/A', // Renamed from 'url' to 'image_url' for clarity in CSV
-      status: status,
-      status_reason: imageInfo.status_reason || '',
-      tweet_url: imageInfo.tweetUrl,
-      tweet_id: imageInfo.tweetId,
-      tweet_date: imageInfo.tweetDate, // Should be ISO string or 'N/A'
-      timestamp: new Date().toISOString()
-    };
+      let logEntry = {
+        filename: imageInfo.filename || 'N/A',
+        image_url: imageInfo.url || 'N/A', // Renamed from 'url' to 'image_url' for clarity in CSV
+        status: status,
+        status_reason: imageInfo.status_reason || '',
+        tweet_url: imageInfo.tweetUrl,
+        tweet_id: imageInfo.tweetId,
+        tweet_date: imageInfo.tweetDate, // Should be ISO string or 'N/A'
+        timestamp: new Date().toISOString()
+      };
 
-    switch(status) {
-      case 'downloaded':
-        this.downloadedImages++;
-        break;
-      case 'skipped':
-        this.skippedImages++;
-        break;
-      case 'failed':
-        this.failedImages++;
-        break;
-      case 'failed_tweet_processing':
-        this.failedTweetProcessing++;
-        // For failed tweet processing, some imageInfo fields might be N/A
-        logEntry.status_reason = imageInfo.status_reason || 'Tweet processing failed';
-        break;
-    }
+      switch(status) {
+        case 'downloaded':
+          this.downloadedImages++;
+          break;
+        case 'skipped':
+          this.skippedImages++;
+          break;
+        case 'failed':
+          this.failedImages++;
+          break;
+        case 'failed_tweet_processing':
+          this.failedTweetProcessing++;
+          // For failed tweet processing, some imageInfo fields might be N/A
+          logEntry.status_reason = imageInfo.status_reason || 'Tweet processing failed';
+          break;
+      }
 
-    this.downloadHistory.push(logEntry);
+      this.downloadHistory.push(logEntry);
+    }).catch(err => {
+      // Log but don't throw - tracking should not break downloads
+      logger.warn(`Download tracker update error: ${err.message}`);
+    });
+
     this.logProgress();
   }
 

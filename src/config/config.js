@@ -75,5 +75,50 @@ export default {
     // Currently, it processes all accounts in the list sequentially.
     // This could be used for future enhancements like taking breaks between batches.
     accountsPerBatch: 5, // Example, not currently implemented in the loop logic this way
+  },
+  // Database configuration for persistent tracking
+  database: {
+    path: process.env.DB_PATH || './data/twitter_downloads.db',
+    // How many previously processed tweet IDs to load into memory for incremental detection
+    maxCachedTweetIds: parseInt(process.env.MAX_CACHED_TWEET_IDS) || 5000,
+    // Early stop: stop scrolling when encountering consecutive already-processed tweets
+    // Disabled by default - user must opt-in via CLI (--early-stop) or ENV
+    earlyStopEnabled: process.env.EARLY_STOP_ENABLED === 'true',
+    // How many consecutive known tweets to encounter before stopping scroll (when enabled)
+    earlyStopThreshold: parseInt(process.env.EARLY_STOP_THRESHOLD) || 20,
+  },
+  // Parallel processing configuration
+  parallelProcessing: {
+    // Enable parallel processing mode
+    enabled: process.env.PARALLEL_ENABLED !== 'false',
+    // Number of browser tabs to use for parallel processing
+    tabCount: parseInt(process.env.PARALLEL_TABS) || 3,
+    // Minimum delay between any two tabs starting navigation (ms)
+    staggerDelay: parseInt(process.env.STAGGER_DELAY) || 2000,
+    // Maximum retries per tweet before giving up
+    maxRetriesPerTweet: parseInt(process.env.MAX_TWEET_RETRIES) || 3,
+    // Global backoff duration when rate limited (ms)
+    rateLimitBackoff: parseInt(process.env.RATE_LIMIT_BACKOFF) || 60000,
+  },
+  // Resume capability configuration
+  resume: {
+    // Enable resume capability
+    enabled: process.env.RESUME_ENABLED !== 'false',
+    // Auto-resume without prompting (if false, will ask user)
+    autoResume: process.env.AUTO_RESUME === 'true',
+  },
+  // Download behavior configuration
+  download: {
+    // Order: 'newest' or 'oldest' first
+    order: process.env.DOWNLOAD_ORDER || 'newest',
+  },
+  // Retry configuration
+  retry: {
+    // Max retries for tweet page navigation
+    maxTweetRetries: parseInt(process.env.MAX_TWEET_RETRIES) || 3,
+    // Max retries for image downloads
+    maxImageRetries: parseInt(process.env.MAX_IMAGE_RETRIES) || 3,
+    // Base delay between retries (ms) - will be multiplied by attempt number
+    retryBaseDelay: parseInt(process.env.RETRY_BASE_DELAY) || 2000,
   }
 };
