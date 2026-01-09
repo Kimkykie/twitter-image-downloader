@@ -4,6 +4,7 @@ import StealthPlugin from 'puppeteer-extra-plugin-stealth'; // Stealth plugin
 import config from '../config/config.js';
 import logger from '../utils/logger.js';
 import { setTimeout as sleep } from 'node:timers/promises';
+import PagePoolManager from './pagePoolManager.js';
 
 
 // Apply the stealth plugin
@@ -16,6 +17,7 @@ class BrowserService {
   constructor() {
     this.browser = null;
     this.page = null;
+    this.pagePool = null;  // For parallel processing mode
   }
 
   /**
@@ -93,6 +95,35 @@ class BrowserService {
       this.page = null;
       throw error;
     }
+  }
+
+  /**
+   * Creates a page pool for parallel processing.
+   * @param {number} poolSize - Number of pages in the pool (default from config)
+   * @returns {Promise<PagePoolManager>} The page pool manager
+   */
+  async createPagePool(poolSize = config.parallelProcessing.tabCount) {
+    if (!this.browser || !this.browser.isConnected()) {
+      throw new Error('Browser must be launched before creating page pool');
+    }
+
+    if (this.pagePool) {
+      logger.warn('Page pool already exists, cleaning up before creating new one');
+      await this.pagePool.cleanup();
+    }
+
+    this.pagePool = new PagePoolManager(this.browser, poolSize);
+    await this.pagePool.initialize();
+
+    return this.pagePool;
+  }
+
+  /**
+   * Gets the existing page pool.
+   * @returns {PagePoolManager|null}
+   */
+  getPagePool() {
+    return this.pagePool;
   }
 
   /**
@@ -174,6 +205,18 @@ class BrowserService {
    * Cleans up browser resources
    */
   async cleanup() {
+    // Clean up page pool first
+    if (this.pagePool) {
+      try {
+        await this.pagePool.cleanup();
+        logger.info('Page pool cleaned up successfully.');
+      } catch (error) {
+        logger.warn(`Error cleaning up page pool: ${error.message}`);
+      } finally {
+        this.pagePool = null;
+      }
+    }
+
     try {
       if (this.page && !this.page.isClosed()) {
         await this.page.close();

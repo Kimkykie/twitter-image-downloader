@@ -4,12 +4,85 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import authService from './services/authService.js';
 import browserService from './services/browserService.js';
 import imageService from './services/imageService.js';
+import progressTracker from './services/progressTracker.js';
 import logger from './utils/logger.js';
 import config from './config/config.js';
 import fs from 'fs';
 import path from 'path';
+import { initializeDatabase, closeDatabase } from './db/index.js';
 
 const MAX_LOGIN_RETRIES = 3;
+
+/**
+ * Parse command line arguments
+ * Supports: --newest, --oldest, --new-only, --stop-after=N, --help
+ */
+function parseCliArgs() {
+  const args = process.argv.slice(2);
+  const options = {
+    downloadOrder: null,      // null = use config default
+    newOnly: null,            // null = use config default (false)
+    stopAfter: null,          // null = use config default
+    accounts: [],             // Direct account names from CLI
+  };
+
+  for (const arg of args) {
+    if (arg === '--newest' || arg === '-n') {
+      options.downloadOrder = 'newest';
+    } else if (arg === '--oldest' || arg === '-o') {
+      options.downloadOrder = 'oldest';
+    } else if (arg === '--new-only' || arg === '--early-stop' || arg === '-e') {
+      options.newOnly = true;
+    } else if (arg.startsWith('--stop-after=')) {
+      options.stopAfter = parseInt(arg.split('=')[1]) || 20;
+    } else if (arg === '--help' || arg === '-h') {
+      printHelp();
+      process.exit(0);
+    } else if (!arg.startsWith('-')) {
+      // Treat as account name
+      options.accounts.push(arg.replace(/^@/, ''));
+    }
+  }
+
+  return options;
+}
+
+/**
+ * Print CLI help
+ */
+function printHelp() {
+  console.log(`
+Twitter Image Downloader
+
+Usage: npm start [options] [accounts...]
+
+Options:
+  --newest, -n           Download newest tweets first (default)
+  --oldest, -o           Download oldest tweets first
+  --new-only, -e         Only check for new tweets - stop when reaching
+                         already-downloaded tweets (useful for updates)
+  --stop-after=N         With --new-only: stop after N known tweets (default: 20)
+  --help, -h             Show this help message
+
+Examples:
+  npm start                              # Interactive mode (with prompts)
+  npm start elonmusk                     # Download all from @elonmusk
+  npm start --oldest elonmusk            # Download oldest tweets first
+  npm start --new-only elonmusk          # Only download new tweets
+  npm start --new-only --stop-after=10 elonmusk
+  npm start user1 user2 user3            # Multiple accounts
+
+Environment Variables (in .env):
+  DOWNLOAD_ORDER=newest|oldest           # Which tweets to download first
+  EARLY_STOP_ENABLED=true|false          # Only check for new tweets (default: false)
+  EARLY_STOP_THRESHOLD=20                # Known tweets to encounter before stopping
+  MAX_TWEET_RETRIES=3                    # Retries for failed tweet pages
+  MAX_IMAGE_RETRIES=3                    # Retries for failed image downloads
+`);
+}
+
+// Store CLI options globally for access in other functions
+let cliOptions = {};
 
 async function attemptLogin(page) {
   const cookiesLoaded = await authService.loadCookies(page);
@@ -86,6 +159,33 @@ async function processAccount(accountToFetch, page) {
     logger.warn("Empty username provided, skipping.");
     return false;
   }
+
+  // Check for incomplete runs (resume capability)
+  if (config.resume.enabled) {
+    const incompleteRun = progressTracker.findIncompleteRun(cleanedUsername);
+    if (incompleteRun) {
+      const remaining = incompleteRun.total_tweets - incompleteRun.processed_tweets;
+      logger.info(`Found incomplete run for @${cleanedUsername}: ${incompleteRun.processed_tweets}/${incompleteRun.total_tweets} tweets processed`);
+
+      let shouldResume = config.resume.autoResume;
+      if (!shouldResume) {
+        const { resumeChoice } = await Inquirer.prompt([{
+          type: 'confirm',
+          name: 'resumeChoice',
+          message: `Resume previous run for @${cleanedUsername}? (${remaining} tweets remaining)`,
+          default: true
+        }]);
+        shouldResume = resumeChoice;
+      }
+
+      if (!shouldResume) {
+        // Cancel the old run and start fresh
+        progressTracker.cancelRun(incompleteRun.id);
+        logger.info(`Cancelled previous run. Starting fresh for @${cleanedUsername}`);
+      }
+    }
+  }
+
   logger.info(`Preparing to process account: @${cleanedUsername}`);
   try {
     await imageService.fetchAllImagesForUser(page, cleanedUsername);
@@ -95,6 +195,8 @@ async function processAccount(accountToFetch, page) {
     return true;
   } catch (error) {
     logger.error(`Critical error processing account @${cleanedUsername}: ${error.message}`, error.stack);
+    // Mark the run as interrupted for potential resume later
+    progressTracker.interruptRun();
     // Ensure cleanup for the specific user if a major error occurs within fetchAllImagesForUser
     // imageService.cleanup() is called at the end of fetchAllImagesForUser,
     // but this is an additional safeguard.
@@ -104,6 +206,59 @@ async function processAccount(accountToFetch, page) {
     }
     return false;
   }
+}
+
+/**
+ * Prompt user for download options in interactive mode
+ */
+async function getDownloadOptions() {
+  const answers = await Inquirer.prompt([
+    {
+      type: 'list',
+      name: 'downloadOrder',
+      message: 'Which tweets do you want to download first?',
+      choices: [
+        { name: 'Newest first - start with most recent tweets', value: 'newest' },
+        { name: 'Oldest first - start with earliest tweets', value: 'oldest' }
+      ],
+      default: config.download.order === 'oldest' ? 1 : 0
+    },
+    {
+      type: 'list',
+      name: 'scrollBehavior',
+      message: 'How much of the timeline should we scroll?',
+      choices: [
+        { name: 'Full timeline - scroll through all tweets', value: 'full' },
+        { name: 'New tweets only - stop when reaching tweets already downloaded', value: 'new_only' }
+      ],
+      default: config.database.earlyStopEnabled ? 1 : 0
+    }
+  ]);
+
+  // If user chose new_only, ask for threshold
+  if (answers.scrollBehavior === 'new_only') {
+    const thresholdAnswer = await Inquirer.prompt([{
+      type: 'number',
+      name: 'threshold',
+      message: 'How many already-downloaded tweets should we encounter before stopping?',
+      default: config.database.earlyStopThreshold,
+      validate: (input) => {
+        const num = parseInt(input);
+        if (isNaN(num) || num < 1) return 'Please enter a number greater than 0';
+        return true;
+      }
+    }]);
+    config.database.earlyStopEnabled = true;
+    config.database.earlyStopThreshold = thresholdAnswer.threshold;
+  } else {
+    config.database.earlyStopEnabled = false;
+  }
+
+  // Apply download order
+  config.download.order = answers.downloadOrder;
+
+  const scrollMode = answers.scrollBehavior === 'full' ? 'full timeline' : `new only (stop after ${config.database.earlyStopThreshold} known tweets)`;
+  logger.info(`Settings: ${answers.downloadOrder} first, ${scrollMode}`);
 }
 
 async function getAccountList() {
@@ -180,6 +335,32 @@ async function main() {
 
   try {
     logger.info("Application starting...");
+
+    // Parse CLI arguments and apply overrides
+    cliOptions = parseCliArgs();
+
+    // Apply CLI overrides to config
+    if (cliOptions.downloadOrder) {
+      config.download.order = cliOptions.downloadOrder;
+      logger.info(`Download order: ${cliOptions.downloadOrder} first`);
+    }
+    if (cliOptions.newOnly) {
+      config.database.earlyStopEnabled = true;
+      if (cliOptions.stopAfter) {
+        config.database.earlyStopThreshold = cliOptions.stopAfter;
+      }
+      logger.info(`New tweets only mode: will stop after ${config.database.earlyStopThreshold} already-downloaded tweets`);
+    }
+
+    // Initialize database for persistent tracking
+    const dbInitialized = await initializeDatabase();
+    if (!dbInitialized) {
+      logger.warn('Database initialization failed. Continuing without persistent tracking.');
+    } else {
+      // Clean up old interrupted runs
+      progressTracker.cleanupOldRuns();
+    }
+
     browser = await browserService.launchBrowser();
     page = await browserService.setupPage(browser);
 
@@ -190,8 +371,19 @@ async function main() {
     }
 
     let continueDownloading = true;
+    let isFirstRun = true;
+
     while (continueDownloading) {
-      const accountsToProcess = await getAccountList();
+      // In interactive mode (no CLI accounts), prompt for download options on first run
+      if (cliOptions.accounts.length === 0 && isFirstRun) {
+        await getDownloadOptions();
+        isFirstRun = false;
+      }
+
+      // Use CLI accounts if provided, otherwise prompt interactively
+      const accountsToProcess = cliOptions.accounts.length > 0
+        ? cliOptions.accounts
+        : await getAccountList();
 
       if (accountsToProcess.length > 0) {
         for (const account of accountsToProcess) {
@@ -215,15 +407,21 @@ async function main() {
 
       await sleep(config.timeouts.short);
 
-      const { shouldContinue } = await Inquirer.prompt([{
-        type: 'confirm',
-        name: 'shouldContinue',
-        message: 'Would you like to fetch media from another account or list of accounts?',
-        default: false
-      }]);
-      continueDownloading = shouldContinue;
-      if (!continueDownloading) {
-        logger.info("User chose to stop downloading.");
+      // If accounts were provided via CLI, exit after processing them
+      if (cliOptions.accounts.length > 0) {
+        logger.info("CLI accounts processed. Exiting.");
+        continueDownloading = false;
+      } else {
+        const { shouldContinue } = await Inquirer.prompt([{
+          type: 'confirm',
+          name: 'shouldContinue',
+          message: 'Would you like to fetch media from another account or list of accounts?',
+          default: false
+        }]);
+        continueDownloading = shouldContinue;
+        if (!continueDownloading) {
+          logger.info("User chose to stop downloading.");
+        }
       }
     }
   } catch (error) {
@@ -235,6 +433,8 @@ async function main() {
     if (browserService.browser) { // Use the getter from the service
       await browserService.cleanup();
     }
+    // Close database connection
+    closeDatabase();
     logger.info("Application finished and resources cleaned up. Exiting.");
     // process.exit(0); // Let Node.js exit naturally unless error
   }
@@ -250,6 +450,9 @@ async function gracefulShutdown(signal) {
     logger.warn(`Downloads were in progress for @${imageService.currentUsername}. Attempting to wait briefly...`);
     await sleep(config.timeouts.medium); // Give a moment for current downloads
   }
+  // Mark current run as interrupted for potential resume
+  progressTracker.interruptRun();
+
   // If imageService has a specific user context, it might try to save its CSV.
   if (imageService.currentUsername) {
     logger.warn(`Performing final image service cleanup for @${imageService.currentUsername} due to ${signal}.`);
@@ -259,6 +462,10 @@ async function gracefulShutdown(signal) {
   if (browserService.browser) {
     await browserService.cleanup();
   }
+
+  // Close database connection
+  closeDatabase();
+
   logger.info("Graceful shutdown attempt complete. Exiting.");
   process.exit(0); // Force exit after cleanup attempt
 }
